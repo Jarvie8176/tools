@@ -21,6 +21,12 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 CACHE_FILENAME = ".rmig-cache.db"
+# src-manifest CSV emitted by ops.copy under `emit_src_manifest=true`
+# (issue #55). Lives at <dst-root> with a per-run timestamp, so we
+# match by prefix rather than exact name. Excluded from manifest walks
+# for the same reason the dataset marker is — it's rmig metadata, not
+# user payload.
+SRC_MANIFEST_PREFIX = ".rmig-src-manifest-"
 # Stable per-dataset id, stored *in the data root* so it travels with the
 # files. The out-of-root (fallback) cache db is then keyed by this id
 # instead of the absolute mount path — so re-mounting the same physical
@@ -41,7 +47,11 @@ def is_sidecar(name: str) -> bool:
     card): ``._.rmig-dataset`` would otherwise be hashed, land in the
     manifest, and get copied as bogus data."""
     base = name[2:] if name.startswith("._") else name
-    return base.startswith(CACHE_FILENAME) or base == MARKER_FILENAME
+    return (
+        base.startswith(CACHE_FILENAME)
+        or base == MARKER_FILENAME
+        or base.startswith(SRC_MANIFEST_PREFIX)
+    )
 
 
 @dataclass

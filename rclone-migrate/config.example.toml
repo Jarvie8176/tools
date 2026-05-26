@@ -14,6 +14,15 @@ download   = false                   # true → for remotes that don't store the
 local_cache_in_root = true           # cache lives at <root>/.rmig-cache.db
                                      # (false → centralized under state_dir)
 
+# After each successful copy, drop `<dst>/.rmig-src-manifest-<TS>.csv`
+# with one row per src file (path, size, mtime, hash, dedup_status,
+# dedup_representative, in_dst). Default on. Lets a dst-side inspector
+# answer "what did src look like at copy time?" without re-mounting
+# src — important when src is a wipe-after-ingest SD card or when
+# `unique_by_hash` dedup means fewer file *paths* land on dst than src
+# had. Set false to suppress. See issue #55.
+# emit_src_manifest = true
+
 [delete]
 require_check_within = "24h"         # delete must happen within this of last check
 remove_empty_src_dirs = true

@@ -14,6 +14,7 @@ from typing import Optional
 
 import pytest
 
+from rclone_migrate import cache as cache_mod
 from rclone_migrate import config as config_mod
 from rclone_migrate import ops
 
@@ -57,12 +58,16 @@ def _write_config(
 
 
 def _list(p: Path) -> set:
-    """Set of relative paths under p (excluding our cache file + WAL siblings)."""
+    """Set of relative paths under p (excluding rmig sidecars: cache db
+    + WAL siblings, dataset marker, src manifest CSV)."""
     out = set()
     for dp, _dn, fn in os.walk(p):
         for n in fn:
-            if n.startswith(".rmig-cache.db"):  # also catches -wal, -shm, -journal
+            if cache_mod.is_sidecar(n):
                 continue
+            # WAL/SHM/journal siblings of the cache db share the prefix
+            # but is_sidecar already covers `.rmig-cache.db*` via its
+            # startswith() match.
             out.add(str((Path(dp) / n).relative_to(p)))
     return out
 

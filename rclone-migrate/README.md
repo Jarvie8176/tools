@@ -299,6 +299,26 @@ pip install ascmhl && ascmhl verify <root>
 See [docs/mhl-integration.md](docs/mhl-integration.md) for op→generation
 mapping, XML structure, and current limitations.
 
+## Src manifest CSV (default on)
+
+After each successful `copy`, rmig drops a CSV at
+`<dst>/.rmig-src-manifest-<RUN_TIMESTAMP>.csv` recording the *src view*
+at run time — one row per src file with path, size, mtime, hash,
+dedup status, and the representative path kept on dst when this row
+was deduped away by `unique_by_hash`. Lets a dst-side inspector answer
+"what did src look like?" without re-mounting src.
+
+Columns (stable order; new columns append):
+
+```
+filename, rel_path, src_abs_path, size, mtime_utc, hash_algo, hash,
+dedup_status, dedup_representative, in_dst
+```
+
+Set `emit_src_manifest = false` in `[defaults]` or per-job to opt out.
+For remote dst (rclone-spec like `b2:bucket/path`), the CSV lands in
+the state dir under `<state_dir>/<job>/runs/`. Issue #55.
+
 ### Use the rclone remote, not its fuse mount
 
 If your destination is an rclone-mounted directory (e.g. `~/mnt/nas/...` from
