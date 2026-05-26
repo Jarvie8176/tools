@@ -92,6 +92,13 @@ class Defaults:
     mhl_location: Optional[str] = None      # physical location, e.g. "Studio A"
     mhl_comment: Optional[str] = None
     mhl_sides: Optional[List[str]] = None  # None → smart default by op
+    # After a successful copy, drop a CSV manifest of the *src view*
+    # into dst so a dst-side inspector can answer "what did src look
+    # like at copy time?" without re-mounting src. Surfaces the rows
+    # that `unique_by_hash` deduped away. Default-on: the failure mode
+    # of not emitting (silent dst-path loss) is worse than the cost
+    # (a few KB sidecar). Issue #55.
+    emit_src_manifest: bool = True
 
 
 @dataclass
@@ -122,6 +129,7 @@ class Job:
     mhl_location: Optional[str] = None
     mhl_comment: Optional[str] = None
     mhl_sides: Optional[List[str]] = None
+    emit_src_manifest: Optional[bool] = None
 
     def resolved_hash(self, defaults: Defaults) -> Optional[str]:
         return self.hash or defaults.hash
@@ -174,6 +182,13 @@ class Job:
 
     def resolved_mhl_sides(self, defaults: Defaults) -> Optional[List[str]]:
         return self.mhl_sides or defaults.mhl_sides
+
+    def resolved_emit_src_manifest(self, defaults: Defaults) -> bool:
+        return (
+            self.emit_src_manifest
+            if self.emit_src_manifest is not None
+            else defaults.emit_src_manifest
+        )
 
 
 @dataclass
@@ -283,6 +298,9 @@ def load(path: str | Path) -> Config:
         mhl_sides=_as_str_list(
             d.get("mhl_sides"), "mhl_sides", "[defaults]",
         ),
+        emit_src_manifest=bool(
+            d.get("emit_src_manifest", Defaults.emit_src_manifest)
+        ),
     )
 
     de = raw.get("delete", {})
@@ -324,6 +342,7 @@ def load(path: str | Path) -> Config:
                 mhl_sides=_as_str_list(
                     jr.get("mhl_sides"), "mhl_sides", ctx,
                 ),
+                emit_src_manifest=jr.get("emit_src_manifest"),
             )
         )
 

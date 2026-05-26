@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
-from . import audit, hashing, manifest, mhl, rclone, state
+from . import audit, hashing, manifest, mhl, rclone, src_manifest, state
 from . import progress as progress_mod
 from . import verbose as verbose_mod
 from .config import Config, Job
@@ -164,6 +164,32 @@ def _join(root: str, rel: str) -> str:
         return f"{root}{rel}"
     # rclone treats both `local/file` and `remote:path/file` the same way
     return f"{root}/{rel}"
+
+
+def _emit_src_manifest(
+    src_mf: manifest.Manifest,
+    dst_mf: manifest.Manifest,
+    job: Job,
+    state_dir: Path,
+    v: verbose_mod.Verbose,
+) -> None:
+    """Best-effort src manifest CSV emit. Issue #55.
+
+    Failures here MUST NOT propagate — the copy itself has already
+    completed (or partially completed). A failed sidecar write is
+    operator-visible (warn), not a run-fatal condition.
+    """
+    try:
+        src_manifest.write(
+            src_mf=src_mf,
+            dst_mf=dst_mf,
+            src_root=job.src,
+            dst_root=job.dst,
+            fallback_dir=state_dir / "runs",
+            v=v,
+        )
+    except OSError as exc:
+        v.warn(f"[src-manifest] emit failed: {exc}")
 
 
 def negotiate_algo(job: Job, cfg: Config) -> str:
@@ -365,6 +391,13 @@ def do_copy(
             state.meta_set(conn, "last_copy_ts", str(time.time()))
             ev.set_counts(affected=0)
             ev.set_result("ok")
+            # Issue #55: emit src manifest CSV even on the no-op path —
+            # this is exactly the case (src=N dst=N to_copy=0) where the
+            # user is most likely to be puzzled by "why does dst have
+            # fewer file names than src". Dedup info needs to land
+            # regardless of whether anything was actually transferred.
+            if not dry_run and job.resolved_emit_src_manifest(cfg.defaults):
+                _emit_src_manifest(src_mf, dst_mf, job, state_dir, v)
             conn.close()
             return 0
 
@@ -456,6 +489,15 @@ def do_copy(
             ev.set_result("partial")
         else:
             ev.set_result("fail")
+
+        # Issue #55: emit src manifest CSV after the copy loop, regardless
+        # of how many files actually landed. A partial-failure run still
+        # has a well-defined src view at this moment, and capturing it
+        # lets the operator diff "what was on src" vs "what's on dst" in
+        # follow-up triage. dry-run intentionally skips — nothing to
+        # provenance-stamp when no bytes moved.
+        if not dry_run and job.resolved_emit_src_manifest(cfg.defaults):
+            _emit_src_manifest(src_mf, dst_mf, job, state_dir, v)
 
         # MHL emit on dst side after successful (full or partial) copy.
         # Generation is the *delta*: only the files that were just copied.
