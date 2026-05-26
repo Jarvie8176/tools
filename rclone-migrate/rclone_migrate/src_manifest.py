@@ -201,6 +201,13 @@ def write(
                 try:
                     probe.unlink()
                 except OSError:
+                    # Probe cleanup is best-effort: if .touch() succeeded
+                    # the FS is writable, so the real write below will
+                    # work; if the probe is gone already (race / another
+                    # process) we don't care. Either way, swallowing the
+                    # error here is intentional — surfacing it would
+                    # mask the real "is dst writable?" signal we came
+                    # for, which is the .touch() above.
                     pass
         except OSError as exc:
             v.warn(f"[src-manifest] dst not writable ({exc}); "

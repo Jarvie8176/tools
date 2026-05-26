@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import csv
 import io
-import os
 
 from rclone_migrate import cache, src_manifest, verbose
 from rclone_migrate.manifest import Entry, Manifest
