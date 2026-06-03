@@ -1,8 +1,9 @@
-description = "DIT / film / video post; MHL v2.0-aligned; speed-first (xxh family)."
+description = "DIT / film / video post; MHL v2.0-aligned; integrity-first (XXH3-128 archival)."
 priority = [
-    "xxh3", "xxh128", "xxh64",
+    "xxh128", "xxh3", "xxh64",
     "sha1", "md5", "c4",
 ]
 warnings = [
     "xxh3/xxh64/xxh128 are non-cryptographic. For jobs with > 1M files, accidental collision probability becomes non-negligible — switch to sha1 or sha256 at that scale.",
+    "xxh128 (XXH3-128) is preferred over xxh3 (XXH3-64): the 128-bit digest keeps birthday-collision headroom safe as a mixed photo/video archive grows; per-file speed cost over XXH3-64 is negligible (both > 10 GB/s). Override with --hash xxh3 for speed-first single-pass.",
 ]

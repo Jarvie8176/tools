@@ -40,8 +40,10 @@ def test_bundled_dit_is_mhl_compatible():
     mhl_set = {"c4", "md5", "sha1", "xxh64", "xxh3", "xxh128"}
     assert all(a in mhl_set for a in p.priority)
     assert all(a in mhl_set for a in p.multi_hash)
-    # DIT prefers xxh family first
+    # DIT prefers xxh family first; integrity-first → XXH3-128 ahead of XXH3-64
     assert p.priority[0].startswith("xxh")
+    assert p.priority[0] == "xxh128"
+    assert p.priority.index("xxh128") < p.priority.index("xxh3")
 
 
 def test_bundled_forensic_has_multi_hash():
