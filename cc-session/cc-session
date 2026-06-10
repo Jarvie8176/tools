@@ -4,7 +4,7 @@
 set -euo pipefail
 
 PROG="${0##*/}"
-VERSION="0.6.0"
+VERSION="0.6.1"
 
 # Absolute, symlink-resolved path to this script. Captured at top-level
 # because inside a zsh function `$0` is the function name, not the
@@ -1421,13 +1421,26 @@ fi
 # on creation only — re-attaching to an existing session leaves the
 # (possibly absent) marker alone.
 # Lever ⑦: for teleport/resume launches, wrap claude in `env` so the
-# Remote Control display title carries the prefix. `env` is universal,
-# needs no shell (cc-session execs the pane command directly), and
-# sidesteps the tmux "stale server environment" propagation trap.
+# Remote Control display title carries the prefix.
 LAUNCH_CMD=("$CLAUDE_BIN" "${CLAUDE_ARGS[@]}")
 if [[ "$CC_MODE" == teleport ]] && [[ -n "$CC_TP_PREFIX" ]]; then
   LAUNCH_CMD=(env "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=$CC_TP_PREFIX" "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}")
 fi
+
+# PATH fix: a tmux server started outside a login shell (boot-time
+# LaunchAgent, an orphaned server reparented to launchd, a server first
+# spawned from a minimal-PATH context) hands every new pane a spartan
+# PATH — /usr/bin:/bin:/usr/sbin:/sbin only, missing /usr/local/bin and
+# ~/.local/bin. `claude` then inherits it and so does every Bash-tool
+# subprocess it spawns, so brew/node/etc. silently vanish. tmux's own
+# global environment table does NOT fix this (panes inherit the server
+# process env, not the table). Wrap the launch in a bash *login* shell so
+# /etc/profile (path_helper on macOS) + ~/.bash_profile repopulate PATH
+# before claude execs. `exec` keeps the tree flat — bash replaces itself
+# with claude, leaving no extra shell as claude's parent. zsh ${(@q)}
+# quotes each argv element so values with spaces/brackets (e.g. the
+# teleport prefix "[T] ") round-trip intact through `bash -lc`.
+LAUNCH_CMD=(bash -lc "exec ${(j: :)${(@q)LAUNCH_CMD}}")
 
 created=""
 if ! sess_exists "$SESSION_NAME"; then
