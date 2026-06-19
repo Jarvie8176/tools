@@ -799,20 +799,20 @@ autoname_for() {
          return 1; }
 }
 
-@test "background flow sends resume key 1 (summary) when --teleport given" {
+@test "background flow sends Enter (summary) when --teleport given" {
   run "$CC_SESSION" -d -t session_TEST "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
-  wait_for_pane "$SESSION_NAME" "fake: resume key 1 received" 30 \
-    || { echo "fake-claude never received resume key 1"; \
+  wait_for_pane "$SESSION_NAME" "fake: resume key summary (Enter) received" 30 \
+    || { echo "fake-claude never received summary Enter"; \
          tmux capture-pane -t "$SESSION_NAME" -p; \
          return 1; }
 }
 
-@test "background flow sends resume key 2 (full) when --teleport --full" {
+@test "background flow sends Down+Enter (full) when --teleport --full" {
   CC_SESSION_SKIP_FULL_CONFIRM=1 run "$CC_SESSION" -d -t session_TEST --full "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
-  wait_for_pane "$SESSION_NAME" "fake: resume key 2 received" 30 \
-    || { echo "fake-claude never received resume key 2"; \
+  wait_for_pane "$SESSION_NAME" "fake: resume key full (Down) received" 30 \
+    || { echo "fake-claude never received Down arrow for full"; \
          tmux capture-pane -t "$SESSION_NAME" -p; \
          return 1; }
 }
@@ -1308,7 +1308,7 @@ mk_repo() {
     run "$CC_SESSION" -d -t session_TEST "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
   # fake-claude must still come up (resume key flow), but with no prefix.
-  wait_for_pane "$SESSION_NAME" "fake: resume key 1 received" 30 \
+  wait_for_pane "$SESSION_NAME" "fake: resume key summary (Enter) received" 30 \
     || { echo "teleport flow broke with empty prefix"; \
          tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
   pane="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
