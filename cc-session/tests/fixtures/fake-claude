@@ -87,12 +87,20 @@ case " $* " in
 esac
 
 while IFS= read -r line; do
+  # Detect Down arrow escape sequence (ESC [ B) from Ink select navigation.
+  if printf '%s' "$line" | LC_ALL=C grep -q '\[B'; then
+    echo "fake: resume key full (Down) received"
+    continue
+  fi
   case "$line" in
     "1")
       echo "fake: resume key 1 received"
       ;;
     "2")
       echo "fake: resume key 2 received"
+      ;;
+    "")
+      echo "fake: resume key summary (Enter) received"
       ;;
     "/remote-control")
       printf 'Remote Control connecting…\n'

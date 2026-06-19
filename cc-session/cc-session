@@ -4,7 +4,7 @@
 set -euo pipefail
 
 PROG="${0##*/}"
-VERSION="0.6.1"
+VERSION="0.6.2"
 
 # Absolute, symlink-resolved path to this script. Captured at top-level
 # because inside a zsh function `$0` is the function name, not the
@@ -302,8 +302,9 @@ POST-LAUNCH URL CAPTURE
     URL.
 
         1. Resume choice: Poll the pane every 0.5s for up to ~15s,
-           looking for "Resume from summary". When seen, send "1"
-           (summary, default) or "2" (--full).
+           looking for "Resume from summary". When seen, navigate the
+           Ink select via Enter (summary, default) or Down+Enter
+           (--full).
         2. Remote Control enable: Once claude is back at an idle
            prompt, send "/remote-control", then poll up to ~10s for
            "/remote-control is active · Code in CLI or at <URL>".
@@ -1412,10 +1413,12 @@ else
 fi
 
 if [[ -n "$TELEPORT_ID" ]]; then
+  # The teleport resume TUI is an Ink select with the cursor on option 1
+  # (summary) by default. Arrow-down moves to option 2 (full).
   if (( RESUME_FULL )); then
-    RESUME_KEY=2
+    RESUME_KEY=Down
   else
-    RESUME_KEY=1
+    RESUME_KEY=""
   fi
 fi
 
@@ -1502,17 +1505,28 @@ fi
 #      $TMPDIR/cc-session/<SESSION>.url and flash it via tmux
 #      display-message so the URL is visible without grepping.
 (
+  if [[ "${CC_SESSION_MANUAL:-}" == "1" ]]; then
+    echo "$PROG: MANUAL mode — skipping all automation (resume key, /remote-control, /compact)" >&2
+    exit 0
+  fi
+
   resume_timeout="${CC_SESSION_RESUME_TIMEOUT:-15}"
   url_timeout="${CC_SESSION_RC_URL_TIMEOUT:-15}"
 
   if [[ -n "$TELEPORT_ID" ]]; then
-    # Teleport: wait for "Resume from summary" prompt, send 1 or 2.
+    # Teleport: wait for the Ink select menu, then arrow to the right
+    # option and confirm with Enter. Default cursor is on option 1
+    # (summary); Down moves to option 2 (full).
     resume_iters=$(( resume_timeout * 2 ))
     resume_sent=0
     for (( _i=0; _i<resume_iters; _i++ )); do
       if tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null \
            | grep -q 'Resume from summary'; then
-        tmux send-keys -t "$SESSION_NAME" "$RESUME_KEY" Enter
+        if [[ -n "$RESUME_KEY" ]]; then
+          tmux send-keys -t "$SESSION_NAME" "$RESUME_KEY" Enter
+        else
+          tmux send-keys -t "$SESSION_NAME" Enter
+        fi
         resume_sent=1
         break
       fi
