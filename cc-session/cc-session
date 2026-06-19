@@ -145,8 +145,11 @@ OPTIONS
                       instead of the default summary. This re-pays the
                       entire conversation's token cost on the cloud
                       side and can consume a large slice of usage
-                      limits on long sessions. Requires interactive
-                      confirmation ("yes") at the prompt; set
+                      limits on long sessions. Also disables Claude
+                      Code's auto-compact (DISABLE_AUTO_COMPACT=1) so
+                      the full context isn't immediately summarized
+                      after resume. Requires interactive confirmation
+                      ("yes") at the prompt; set
                       CC_SESSION_SKIP_FULL_CONFIRM=1 to bypass when
                       scripting. Has no effect without --teleport.
 
@@ -1424,7 +1427,13 @@ fi
 # Remote Control display title carries the prefix.
 LAUNCH_CMD=("$CLAUDE_BIN" "${CLAUDE_ARGS[@]}")
 if [[ "$CC_MODE" == teleport ]] && [[ -n "$CC_TP_PREFIX" ]]; then
-  LAUNCH_CMD=(env "CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=$CC_TP_PREFIX" "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}")
+  ENV_VARS=("CLAUDE_REMOTE_CONTROL_SESSION_NAME_PREFIX=$CC_TP_PREFIX")
+  # --full: suppress Claude Code's auto-compact so the full transcript
+  # isn't immediately summarized after resume.
+  if (( RESUME_FULL )); then
+    ENV_VARS+=("DISABLE_AUTO_COMPACT=1")
+  fi
+  LAUNCH_CMD=(env "${ENV_VARS[@]}" "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}")
 fi
 
 # PATH fix: a tmux server started outside a login shell (boot-time
