@@ -817,6 +817,23 @@ autoname_for() {
          return 1; }
 }
 
+@test "--teleport --full sets DISABLE_AUTO_COMPACT=1 in claude env" {
+  CC_SESSION_SKIP_FULL_CONFIRM=1 run "$CC_SESSION" -d -t session_TEST --full "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "fake claude env: DISABLE_AUTO_COMPACT=1" 30 \
+    || { echo "DISABLE_AUTO_COMPACT=1 not seen in fake-claude output"; \
+         tmux capture-pane -t "$SESSION_NAME" -p; \
+         return 1; }
+}
+
+@test "--teleport without --full does NOT set DISABLE_AUTO_COMPACT" {
+  run "$CC_SESSION" -d -t session_TEST "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  sleep 2
+  pane="$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null || true)"
+  refute_contains "$pane" "DISABLE_AUTO_COMPACT"
+}
+
 # --- --adopt flag ----------------------------------------------------
 
 @test "--adopt + --teleport mutually exclusive" {
