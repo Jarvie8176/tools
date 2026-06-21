@@ -26,6 +26,24 @@
 #     --adopt tests that pre-create a managed session by hand. Same
 #     stdin loop, just no startup banner.
 
+# Handle subcommands that don't need the full TUI stub.
+case "$1" in
+  --version)
+    echo "${CC_FAKE_CLAUDE_VERSION:-2.1.185} (Claude Code)"
+    exit 0
+    ;;
+  auth)
+    if [ "${2:-}" = "status" ]; then
+      if [ "${CC_FAKE_AUTH_FAIL:-}" = "1" ]; then
+        echo "Not logged in"
+        exit 1
+      fi
+      echo "Logged in as test@example.com"
+      exit 0
+    fi
+    ;;
+esac
+
 echo "fake claude args: $*"
 
 # Lever ⑦ observability: cc-session wraps teleport/resume launches in

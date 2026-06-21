@@ -1,15 +1,15 @@
-#!/bin/zsh
+#!/usr/bin/env bash
 # Attach to a persistent Claude Code tmux session, or create one.
+# Requires: bash >=3.2, coreutils (realpath), tmux.
 
 set -euo pipefail
 
 PROG="${0##*/}"
-VERSION="0.6.2"
+VERSION="0.7.0"
 
 # Absolute, symlink-resolved path to this script. Captured at top-level
-# because inside a zsh function `$0` is the function name, not the
-# script. Used by --update to locate the enclosing git checkout.
-SCRIPT_PATH="${0:A}"
+# so --update can locate the enclosing git checkout.
+SCRIPT_PATH="$(realpath "$0")"
 
 usage() {
   cat <<EOF
@@ -32,13 +32,16 @@ DESCRIPTION
     disconnects and across devices (e.g. Mac desktop -> phone over
     Tailscale).
 
-    Default launch runs \`claude remote-control\` — the dedicated
-    server subcommand that listens for sessions spawned from
-    claude.ai/code. The server prints its claude.ai/code URL on
-    startup; $PROG captures it from the pane and surfaces it via the
-    tmux status bar + a state file (see "Post-launch URL capture"
-    below). If the browser-side bridge becomes unresponsive (long
-    sessions, sleep, network blips), recover with --teleport.
+    Default launch runs \`claude remote-control\` inside a supervisor
+    loop that auto-respawns on crash with exponential backoff
+    (5→10→20→40→60s) and a circuit breaker (5 consecutive failures
+    → stop). Before each respawn the supervisor probes
+    \`claude auth status\`. The server prints its claude.ai/code URL
+    on startup; $PROG captures it from the pane and surfaces it via
+    the tmux status bar + a state file (see "Post-launch URL
+    capture" below). Supervisor log lines are prefixed [cc-sv].
+    If the browser-side bridge becomes unresponsive (long sessions,
+    sleep, network blips), recover with --teleport.
 
     --teleport uses a different path: it launches \`claude --teleport
     <id>\` (an interactive resume of a specific cloud session) and
@@ -53,7 +56,9 @@ ARGUMENTS
 
     SESSION_NAME    tmux session name. Use distinct names to keep multiple
                     Claude Code sessions in parallel.
-                    Default: claude
+                    Default: cc-YYYYMMDD-<claude-version> (e.g.
+                    cc-20260620-2-1-185). Dots in the version are
+                    replaced with dashes for tmux compatibility.
 
 OPTIONS
     -w, --worktree NAME
@@ -285,6 +290,16 @@ ENVIRONMENT
                                     pane has been unchanged this many
                                     minutes. Default: 0 (disabled — a
                                     long quiet task is never reaped).
+    CC_SESSION_SV_MAX_FAILS         Server-mode supervisor: consecutive
+                                    failures before circuit breaker trips.
+                                    Default: 5.
+    CC_SESSION_SV_BACKOFF_BASE      Supervisor backoff base interval in
+                                    seconds. Default: 5.
+    CC_SESSION_SV_BACKOFF_MAX       Supervisor backoff ceiling in seconds.
+                                    Default: 60.
+    CC_SESSION_SV_HEALTHY_THRESHOLD Seconds a claude process must survive
+                                    to be considered a healthy run (resets
+                                    failure counter + backoff). Default: 60.
 
 POST-LAUNCH URL CAPTURE
 
@@ -324,13 +339,13 @@ POST-LAUNCH URL CAPTURE
     demand by claude.ai/code clients.
 
 EXAMPLES
-    $PROG                              # ~/cc, session 'claude'
-    $PROG ~/work/api                   # custom project, session 'claude'
+    $PROG                              # ~/cc, auto-named (e.g. cc-20260620-2-1-185)
+    $PROG ~/work/api                   # custom project, auto-named
     $PROG ~/work/api api               # custom project, session 'api'
     $PROG -d ~/work/api api            # start 'api' detached
     $PROG api                          # later: attach to 'api'
     $PROG --list                       # show running sessions
-    $PROG --kill claude                # terminate the 'claude' session
+    $PROG --kill cc-20260620-2-1-185   # terminate a named session
 
     # Recover a stuck Remote Control session (browser shows
     # "Remote Control disconnected"). Copy the URL from the browser
@@ -460,6 +475,13 @@ EOF
 # letting tmux fall through to a prefix neighbour.
 sess_exists() {
   tmux list-sessions -F '#{session_name}' 2>/dev/null \
+    | grep -qxF -- "$1"
+}
+
+# Check if a tmux session id ($NNN) is still alive. More robust than
+# name-based checks for internal use after session creation.
+sess_id_exists() {
+  tmux list-sessions -F '#{session_id}' 2>/dev/null \
     | grep -qxF -- "$1"
 }
 
@@ -607,7 +629,7 @@ json_str() {
 append_audit() {
   local f dir
   f="$(audit_file)"
-  dir="${f:h}"
+  dir="$(dirname "$f")"
   mkdir -p "$dir" 2>/dev/null || return 0
   printf '%s\n' "$1" >> "$f" 2>/dev/null || true
 }
@@ -776,9 +798,9 @@ update_self() {
   # (and for the bats tests, which can't touch the real repo).
   local repo_root="${CC_SESSION_UPDATE_REPO:-}"
   if [[ -z "$repo_root" ]]; then
-    repo_root="${SCRIPT_PATH:h}"
+    repo_root="$(dirname "$SCRIPT_PATH")"
     while [[ "$repo_root" != "/" ]] && [[ ! -d "$repo_root/.git" ]]; do
-      repo_root="${repo_root:h}"
+      repo_root="$(dirname "$repo_root")"
     done
   fi
   if [[ ! -d "$repo_root/.git" ]] && [[ ! -f "$repo_root/.git" ]]; then
@@ -1087,12 +1109,30 @@ if [[ -n "${2:-}" ]]; then
   SESSION_NAME="$2"
   SESSION_NAME_EXPLICIT=1
 else
-  SESSION_NAME="claude"
+  # Default: cc-YYYYMMDD-<claude-version> (dots→dashes for tmux compat).
+  # Falls back to bare "cc-YYYYMMDD" if version query fails.
+  _cc_date="$(date +%Y%m%d)"
+  _cc_ver="$("$CLAUDE_BIN" --version 2>/dev/null | awk '{print $1}' | tr '.' '-')" || _cc_ver=""
+  if [[ -n "$_cc_ver" ]]; then
+    SESSION_NAME="cc-${_cc_date}-${_cc_ver}"
+  else
+    SESSION_NAME="cc-${_cc_date}"
+  fi
   SESSION_NAME_EXPLICIT=0
 fi
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "$PROG: tmux not installed (try: brew install tmux)" >&2
+  exit 1
+fi
+
+# --- resolve CLAUDE_BIN early (needed for default session naming) -----------
+CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
+if [[ ! -x "$CLAUDE_BIN" ]]; then
+  CLAUDE_BIN="$(command -v claude || true)"
+fi
+if [[ -z "${CLAUDE_BIN:-}" ]]; then
+  echo "$PROG: claude binary not found (set CLAUDE_BIN or install claude)" >&2
   exit 1
 fi
 
@@ -1325,15 +1365,6 @@ fi
 # issue). Kept as a harmless, correct-by-construction local hint.
 CC_TP_PREFIX="${CC_SESSION_TELEPORT_TITLE_PREFIX-[T] }"
 
-CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
-if [[ ! -x "$CLAUDE_BIN" ]]; then
-  CLAUDE_BIN="$(command -v claude || true)"
-fi
-if [[ -z "${CLAUDE_BIN:-}" ]]; then
-  echo "$PROG: claude binary not found (set CLAUDE_BIN or install claude)" >&2
-  exit 1
-fi
-
 # Build claude argv. Two launch paths:
 #
 #   - Default launch: `claude remote-control` — the dedicated subcommand
@@ -1439,36 +1470,90 @@ if [[ "$CC_MODE" == teleport ]] && [[ -n "$CC_TP_PREFIX" ]]; then
   LAUNCH_CMD=(env "${ENV_VARS[@]}" "$CLAUDE_BIN" "${CLAUDE_ARGS[@]}")
 fi
 
-# PATH fix: a tmux server started outside a login shell (boot-time
-# LaunchAgent, an orphaned server reparented to launchd, a server first
-# spawned from a minimal-PATH context) hands every new pane a spartan
-# PATH — /usr/bin:/bin:/usr/sbin:/sbin only, missing /usr/local/bin and
-# ~/.local/bin. `claude` then inherits it and so does every Bash-tool
-# subprocess it spawns, so brew/node/etc. silently vanish. tmux's own
-# global environment table does NOT fix this (panes inherit the server
-# process env, not the table). Wrap the launch in a bash *login* shell so
-# /etc/profile (path_helper on macOS) + ~/.bash_profile repopulate PATH
-# before claude execs. `exec` keeps the tree flat — bash replaces itself
-# with claude, leaving no extra shell as claude's parent. zsh ${(@q)}
-# quotes each argv element so values with spaces/brackets (e.g. the
-# teleport prefix "[T] ") round-trip intact through `bash -lc`.
-LAUNCH_CMD=(bash -lc "exec ${(j: :)${(@q)LAUNCH_CMD}}")
+# --- Supervisor wrapper (server-mode only) -----------------------------------
+# Teleport is single-use — no respawn. Server-mode wraps claude in a
+# supervisor loop with circuit breaker, exponential backoff, and pre-
+# respawn auth probe. The supervisor runs inside the tmux pane; its log
+# lines are prefixed [cc-sv] so they're distinguishable from claude output.
+CC_SV_MAX_FAILS="${CC_SESSION_SV_MAX_FAILS:-5}"
+CC_SV_BACKOFF_BASE="${CC_SESSION_SV_BACKOFF_BASE:-5}"
+CC_SV_BACKOFF_MAX="${CC_SESSION_SV_BACKOFF_MAX:-60}"
+CC_SV_HEALTHY_THRESHOLD="${CC_SESSION_SV_HEALTHY_THRESHOLD:-60}"
+
+if [[ "$CC_MODE" == server ]]; then
+  # Build the inner command string that the supervisor will exec on each
+  # attempt. printf %q quotes each element for safe eval inside bash -lc.
+  _SV_INNER="$(printf '%q ' "${LAUNCH_CMD[@]}")"
+  # The supervisor is a self-contained bash snippet passed to the pane.
+  # It replaces the direct `exec claude remote-control` so the pane
+  # process tree is: bash(supervisor) → claude(child).
+  _SV_SCRIPT='
+    fails=0; delay='"$CC_SV_BACKOFF_BASE"'
+    while true; do
+      echo "[cc-sv] starting claude (attempt $((fails+1)), backoff=${delay}s)"
+      start_ts=$(date +%s)
+      '"$_SV_INNER"' &
+      child=$!
+      wait "$child" 2>/dev/null
+      rc=$?
+      elapsed=$(( $(date +%s) - start_ts ))
+      echo "[cc-sv] claude exited rc=$rc after ${elapsed}s"
+      if (( elapsed >= '"$CC_SV_HEALTHY_THRESHOLD"' )); then
+        fails=0; delay='"$CC_SV_BACKOFF_BASE"'
+        echo "[cc-sv] ran >'"$CC_SV_HEALTHY_THRESHOLD"'s — resetting circuit breaker"
+      else
+        fails=$((fails + 1))
+      fi
+      if (( fails >= '"$CC_SV_MAX_FAILS"' )); then
+        echo "[cc-sv] CIRCUIT BREAKER: $fails consecutive failures — stopping"
+        break
+      fi
+      claude_bin='"$(printf '%q' "$CLAUDE_BIN")"'
+      echo "[cc-sv] pre-respawn auth probe..."
+      if ! "$claude_bin" auth status >/dev/null 2>&1; then
+        echo "[cc-sv] auth probe FAILED — waiting ${delay}s before retry"
+      else
+        echo "[cc-sv] auth probe OK"
+      fi
+      echo "[cc-sv] backoff ${delay}s..."
+      sleep "$delay"
+      delay=$(( delay * 2 ))
+      (( delay > '"$CC_SV_BACKOFF_MAX"' )) && delay='"$CC_SV_BACKOFF_MAX"'
+    done
+    echo "[cc-sv] supervisor stopped"
+  '
+  LAUNCH_CMD=(bash -lc "$_SV_SCRIPT")
+else
+  # Teleport/resume: direct exec, no supervisor.
+  # PATH fix: wrap in bash login shell. printf %q quotes each argv
+  # element so values with spaces/brackets (e.g. the teleport prefix
+  # "[T] ") round-trip intact through `bash -lc`.
+  _QUOTED_CMD="$(printf '%q ' "${LAUNCH_CMD[@]}")"
+  LAUNCH_CMD=(bash -lc "exec $_QUOTED_CMD")
+fi
 
 created=""
+SESSION_ID=""
 if ! sess_exists "$SESSION_NAME"; then
   tmux new-session -d -s "$SESSION_NAME" -c "$PROJECT_DIR" "${LAUNCH_CMD[@]}"
+  # Capture the numeric $NNN session id for unambiguous internal addressing.
+  # Name-based `-t name` is vulnerable to prefix-matching when the exact
+  # session dies; $NNN is assigned at creation and is unique within the
+  # tmux server's lifetime.
+  SESSION_ID="$(tmux list-sessions -F '#{session_name} #{session_id}' 2>/dev/null \
+    | awk -v n="$SESSION_NAME" '$1 == n {print $2; exit}')" || true
   # Set options only if the session is still here. A claude that crashes
   # in <a few ms (rare with real claude, possible with stub binaries)
   # tears the pane down between `new-session` and these calls — without
   # this guard `set -e` would propagate the inner tmux failure and
   # cc-session would exit 1 even though "claude crashed" is the very
   # case we want to surface via --status, not via a shell error.
-  if sess_exists "$SESSION_NAME"; then
-    tmux set-option -t "$SESSION_NAME" -q '@cc-session-managed' '1' || true
+  if [[ -n "$SESSION_ID" ]]; then
+    tmux set-option -t "$SESSION_ID" -q '@cc-session-managed' '1' || true
     # @cc-session-mode drives the whole state machine: lever ② reads it
     # to refuse killing a server, ⑥ to refuse reusing a teleport, ④ to
     # scope the reaper. Set it right next to the managed marker.
-    tmux set-option -t "$SESSION_NAME" -q '@cc-session-mode' "$CC_MODE" || true
+    tmux set-option -t "$SESSION_ID" -q '@cc-session-mode' "$CC_MODE" || true
     # Keep the pane (and its scrollback) around after claude exits so a
     # crash on startup is debuggable. Without this tmux tears down the
     # window and the buffer — including any error output — is gone
@@ -1476,9 +1561,13 @@ if ! sess_exists "$SESSION_NAME"; then
     # plus a "Pane is dead (status N)" footer; contents remain
     # capturable via `tmux capture-pane`. User must `cc-session --kill
     # <name>` (or `tmux kill-session`) to clean up after exit.
-    tmux set-window-option -t "$SESSION_NAME" -q remain-on-exit on || true
+    tmux set-window-option -t "$SESSION_ID" -q remain-on-exit on || true
   fi
   created=1
+else
+  # Existing session — resolve its $NNN for internal use.
+  SESSION_ID="$(tmux list-sessions -F '#{session_name} #{session_id}' 2>/dev/null \
+    | awk -v n="$SESSION_NAME" '$1 == n {print $2; exit}')" || true
 fi
 
 # Lever ⑤: record the teleport/resume attempt at birth — synchronously,
@@ -1513,6 +1602,12 @@ fi
   resume_timeout="${CC_SESSION_RESUME_TIMEOUT:-15}"
   url_timeout="${CC_SESSION_RC_URL_TIMEOUT:-15}"
 
+  # Use $SESSION_ID for all tmux operations inside this subshell (C4:
+  # $NNN addressing eliminates prefix-match ambiguity on name-based
+  # targets). SESSION_NAME is still used for state files and audit
+  # records (human-readable lineage).
+  _T="$SESSION_ID"
+
   if [[ -n "$TELEPORT_ID" ]]; then
     # Teleport: wait for the Ink select menu, then arrow to the right
     # option and confirm with Enter. Default cursor is on option 1
@@ -1520,12 +1615,12 @@ fi
     resume_iters=$(( resume_timeout * 2 ))
     resume_sent=0
     for (( _i=0; _i<resume_iters; _i++ )); do
-      if tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null \
+      if tmux capture-pane -t "$_T" -p 2>/dev/null \
            | grep -q 'Resume from summary'; then
         if [[ -n "$RESUME_KEY" ]]; then
-          tmux send-keys -t "$SESSION_NAME" "$RESUME_KEY" Enter
+          tmux send-keys -t "$_T" "$RESUME_KEY" Enter
         else
-          tmux send-keys -t "$SESSION_NAME" Enter
+          tmux send-keys -t "$_T" Enter
         fi
         resume_sent=1
         break
@@ -1533,12 +1628,12 @@ fi
       sleep 0.5
     done
     if (( ! resume_sent )); then
-      tmux display-message -t "$SESSION_NAME" -d 12000 \
+      tmux display-message -t "$_T" -d 12000 \
         "$PROG: WARN — resume prompt not seen in ${resume_timeout}s; bump CC_SESSION_RESUME_TIMEOUT" \
         2>/dev/null || true
     fi
     sleep 2  # give resume choice a moment to settle into idle prompt
-    url="$(enable_remote_control "$SESSION_NAME")" || url=""
+    url="$(enable_remote_control "$_T")" || url=""
   elif [[ -n "$RESUME_UUID" ]]; then
     # Local resume: claude --resume loads on-disk transcript directly.
     # No "Resume from summary" prompt here (that's a teleport-only
@@ -1546,7 +1641,7 @@ fi
     # surface a fresh RC URL since claude --resume has no native RC
     # registration.
     sleep 2  # give claude time to open the JSONL and reach idle
-    url="$(enable_remote_control "$SESSION_NAME")" || url=""
+    url="$(enable_remote_control "$_T")" || url=""
   else
     # Server-mode launch: poll for the URL the server prints on startup.
     # No keystrokes needed. Bail early if the pane is dead (claude
@@ -1555,9 +1650,9 @@ fi
     url=""
     url_iters=$(( url_timeout * 2 ))
     for (( _i=0; _i<url_iters; _i++ )); do
-      url="$(get_active_rc_url "$SESSION_NAME")"
+      url="$(get_active_rc_url "$_T")"
       [[ -n "$url" ]] && break
-      pane_dead="$(tmux list-panes -s -t "$SESSION_NAME" \
+      pane_dead="$(tmux list-panes -s -t "$_T" \
                      -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
       [[ "$pane_dead" == "1" ]] && break
       sleep 0.5
@@ -1572,7 +1667,7 @@ fi
       cc_derived="$(printf '%s' "$url" | grep -oE '(env_[0-9A-Za-z]+|session_[0-9A-Za-z]+)' | tail -1 || true)"
       emit_audit url-captured teleport "$cc_kind" "$cc_req_id" "$SESSION_NAME" "$cc_full" "$PROJECT_DIR" "$url" "${cc_derived:-unknown}"
     fi
-    tmux display-message -t "$SESSION_NAME" -d 8000 \
+    tmux display-message -t "$_T" -d 8000 \
       "$PROG: Remote Control: $url" 2>/dev/null || true
 
     # /compact lands here, immediately after URL capture. Successful
@@ -1584,14 +1679,14 @@ fi
     # bytes get buffered and parsed as a slash command. No artificial
     # grace period needed.
     if (( RUN_COMPACT )); then
-      tmux send-keys -t "$SESSION_NAME" "/compact" Enter 2>/dev/null || true
+      tmux send-keys -t "$_T" "/compact" Enter 2>/dev/null || true
     fi
   else
     # Either teleport's /remote-control didn't surface a URL, or the
     # server never printed one. Surface a hint so the user — who
     # likely ran with --detach and won't see this in the foreground —
     # discovers it on next attach instead of silently getting no URL.
-    tmux display-message -t "$SESSION_NAME" -d 12000 \
+    tmux display-message -t "$_T" -d 12000 \
       "$PROG: WARN — no RC URL captured in ${url_timeout}s; check pane manually or bump CC_SESSION_RC_URL_TIMEOUT" \
       2>/dev/null || true
     # If /compact was requested but URL never came up, don't fire it
@@ -1599,7 +1694,7 @@ fi
     # land in arbitrary input. Surface a separate warning so the user
     # knows compact didn't run.
     if (( RUN_COMPACT )); then
-      tmux display-message -t "$SESSION_NAME" -d 12000 \
+      tmux display-message -t "$_T" -d 12000 \
         "$PROG: WARN — /compact skipped (URL never captured; claude not at known idle)" \
         2>/dev/null || true
     fi
@@ -1621,24 +1716,24 @@ fi
       sleep "$reap_poll"
       # Session already gone (explicit --kill, or another reaper won):
       # close the lineage and stop.
-      if ! sess_exists "$SESSION_NAME"; then
+      if ! sess_id_exists "$_T"; then
         emit_audit reap teleport "$cc_kind" "$cc_req_id" "$SESSION_NAME" "$cc_full" "$PROJECT_DIR" "" gone
         break
       fi
       # Scope guard: marker no longer 'teleport' (cleared / re-stamped)
       # ⇒ never act outside teleport-mode. Same fence as ②/⑥.
-      reap_cur_mode="$(tmux show-options -t "$SESSION_NAME" -v '@cc-session-mode' 2>/dev/null || true)"
+      reap_cur_mode="$(tmux show-options -t "$_T" -v '@cc-session-mode' 2>/dev/null || true)"
       [[ "$reap_cur_mode" != "teleport" ]] && break
       # Hard "done": claude exited and remain-on-exit holds a dead pane.
       # Grace, re-confirm (avoid reaping a sub-second flicker), reap.
-      reap_pd="$(tmux list-panes -s -t "$SESSION_NAME" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+      reap_pd="$(tmux list-panes -s -t "$_T" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
       if [[ "$reap_pd" == "1" ]]; then
         sleep "$reap_grace"
-        reap_pd="$(tmux list-panes -s -t "$SESSION_NAME" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+        reap_pd="$(tmux list-panes -s -t "$_T" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
         if [[ "$reap_pd" == "1" ]]; then
           emit_audit reap teleport "$cc_kind" "$cc_req_id" "$SESSION_NAME" "$cc_full" "$PROJECT_DIR" "" pane-dead
           remove_state_url "$SESSION_NAME"
-          tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+          tmux kill-session -t "$_T" 2>/dev/null || true
           break
         fi
       fi
@@ -1646,7 +1741,7 @@ fi
       # must never be wrongly reaped, so this is strictly opt-in and
       # only on the still-alive pane (dead handled above).
       if (( idle_min > 0 )); then
-        reap_cur_hash="$(tmux capture-pane -t "$SESSION_NAME" -p -S -50 2>/dev/null | cksum 2>/dev/null | awk '{print $1}' || true)"
+        reap_cur_hash="$(tmux capture-pane -t "$_T" -p -S -50 2>/dev/null | cksum 2>/dev/null | awk '{print $1}' || true)"
         if [[ -n "$reap_cur_hash" && "$reap_cur_hash" == "$reap_last_hash" ]]; then
           reap_idle_secs=$(( reap_idle_secs + reap_poll ))
         else
@@ -1656,7 +1751,7 @@ fi
         if (( reap_idle_secs >= idle_min * 60 )); then
           emit_audit reap teleport "$cc_kind" "$cc_req_id" "$SESSION_NAME" "$cc_full" "$PROJECT_DIR" "" idle
           remove_state_url "$SESSION_NAME"
-          tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
+          tmux kill-session -t "$_T" 2>/dev/null || true
           break
         fi
       fi

@@ -1,7 +1,6 @@
 #!/usr/bin/env bats
 #
-# Black-box tests for cc-session. The script is zsh and bats runs in
-# bash, so we never source it — every test invokes cc-session as a
+# Black-box tests for cc-session. Every test invokes cc-session as a
 # subprocess. claude is stubbed with tests/fixtures/fake-claude so we
 # never touch the real CLI, the cloud, or anything network-bound.
 #
@@ -38,15 +37,17 @@ setup() {
 
 teardown() {
   tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
-  # Lever ① auto-named teleport sessions (claude-tp-<id8>-<hex>) have
-  # dynamic names; sweep them. Safe — the tmux server is isolated to
-  # this bats run via TMUX_TMPDIR.
+  # Lever ① auto-named teleport sessions (claude-tp-<id8>-<hex>) and
+  # C3 auto-named default sessions (cc-YYYYMMDD-*) have dynamic names;
+  # sweep them. Safe — the tmux server is isolated to this bats run
+  # via TMUX_TMPDIR.
   for _s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null \
-                | grep -E "^claude-tp-|$SESSION_NAME" || true); do
+                | grep -E "^claude-tp-|^cc-[0-9]{8}-|$SESSION_NAME" || true); do
     tmux kill-session -t "$_s" 2>/dev/null || true
   done
   rm -rf "$TEST_DIR" \
-         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.url"
+         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.url" \
+         "${BATS_TMPDIR}/cc-session/cc-"*.url
 }
 
 # --- Assertion helpers (non-final-line safe) -------------------------
@@ -276,8 +277,12 @@ autoname_for() {
   # remain-on-exit the pane would be destroyed and its scrollback wiped
   # — making the crash undebuggable. With the option the pane stays
   # with pane_dead=1, scrollback intact, and --status flips alive→no.
+  # SV_MAX_FAILS=1 + SV_BACKOFF_BASE=1 so the supervisor circuit-breaks
+  # immediately after the single crash and the pane dies quickly.
   CC_FAKE_CLAUDE_CRASH=1 \
     CC_SESSION_RC_URL_TIMEOUT=2 \
+    CC_SESSION_SV_MAX_FAILS=1 \
+    CC_SESSION_SV_BACKOFF_BASE=1 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
 
@@ -1378,6 +1383,7 @@ mk_repo() {
   export CC_SESSION_REAP_POLL=1
   export CC_SESSION_REAP_GRACE=1
   CC_FAKE_CLAUDE_CRASH=1 CC_SESSION_RC_URL_TIMEOUT=2 \
+    CC_SESSION_SV_MAX_FAILS=1 CC_SESSION_SV_BACKOFF_BASE=1 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
   assert_eq "$(mode_value "$SESSION_NAME")" "server"
@@ -1442,4 +1448,173 @@ mk_repo() {
   assert_contains "$output" "session: $SESSION_NAME"
   assert_contains "$output" "alive: no"
   refute_contains "$output" "${SESSION_NAME}LONG"
+}
+
+# ====================================================================
+# v0.7 P1: bash migration, supervisor, naming, session_id addressing
+# ====================================================================
+
+# --- C1: bash migration ----------------------------------------------
+
+@test "C1: shebang is bash, not zsh" {
+  head -1 "$CC_SESSION" | grep -q '#!/usr/bin/env bash'
+}
+
+@test "C1: no zsh-only constructs remain in the script" {
+  # ${0:A}, ${var:h}, ${(j:)}, ${(@q)} are zsh-specific.
+  # grep returns 0 if found — we want NOT found, so negate.
+  ! grep -E '\$\{0:A\}|\$\{[a-zA-Z_]+:h\}|\$\{\(j:|\$\{\(@q\)' "$CC_SESSION"
+}
+
+@test "C1: SCRIPT_PATH uses realpath (not zsh \${0:A})" {
+  grep -q 'SCRIPT_PATH=.*realpath' "$CC_SESSION"
+}
+
+@test "C1: printf %q quoting round-trips spaces and brackets in teleport launch" {
+  # Teleport with a prefix containing spaces and brackets must survive
+  # the printf %q → bash -lc round-trip.
+  CC_SESSION_TELEPORT_TITLE_PREFIX="[Test Prefix] " \
+    run "$CC_SESSION" -d -t session_TEST "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "rc-prefix:" 10 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p)"
+  assert_contains "$buf" "rc-prefix:[[Test Prefix] ]"
+}
+
+# --- C2: supervisor loop (server-mode) --------------------------------
+
+@test "C2: server-mode pane shows [cc-sv] supervisor log prefix" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "[cc-sv]" 10 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p)"
+  assert_contains "$buf" "[cc-sv] starting claude"
+}
+
+@test "C2: teleport-mode does NOT run supervisor (no [cc-sv] prefix)" {
+  run "$CC_SESSION" -d -t session_TEST "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  sleep 1
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p 2>/dev/null)"
+  refute_contains "$buf" "[cc-sv]"
+}
+
+@test "C2: circuit breaker stops after SV_MAX_FAILS consecutive crashes" {
+  CC_FAKE_CLAUDE_CRASH=1 \
+    CC_SESSION_SV_MAX_FAILS=2 \
+    CC_SESSION_SV_BACKOFF_BASE=1 \
+    CC_SESSION_RC_URL_TIMEOUT=2 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  # Wait for circuit breaker message (2 crashes × ~0.5s each + 1s backoff)
+  wait_for_pane "$SESSION_NAME" "CIRCUIT BREAKER" 15 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  assert_contains "$buf" "CIRCUIT BREAKER: 2 consecutive failures"
+  assert_contains "$buf" "supervisor stopped"
+}
+
+@test "C2: pre-respawn auth probe runs before backoff" {
+  # Use a stub that crashes once, then the supervisor probes auth and
+  # respawns. We just need to see the auth probe message.
+  CC_FAKE_CLAUDE_CRASH=1 \
+    CC_SESSION_SV_MAX_FAILS=3 \
+    CC_SESSION_SV_BACKOFF_BASE=1 \
+    CC_SESSION_RC_URL_TIMEOUT=2 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "auth probe" 15 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  assert_contains "$buf" "[cc-sv] pre-respawn auth probe..."
+  assert_contains "$buf" "[cc-sv] auth probe OK"
+}
+
+@test "C2: auth probe failure is logged" {
+  CC_FAKE_CLAUDE_CRASH=1 \
+    CC_FAKE_AUTH_FAIL=1 \
+    CC_SESSION_SV_MAX_FAILS=2 \
+    CC_SESSION_SV_BACKOFF_BASE=1 \
+    CC_SESSION_RC_URL_TIMEOUT=2 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "auth probe FAILED" 15 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  assert_contains "$buf" "[cc-sv] auth probe FAILED"
+}
+
+@test "C2: SV_BACKOFF_MAX caps the delay" {
+  CC_FAKE_CLAUDE_CRASH=1 \
+    CC_SESSION_SV_MAX_FAILS=4 \
+    CC_SESSION_SV_BACKOFF_BASE=10 \
+    CC_SESSION_SV_BACKOFF_MAX=15 \
+    CC_SESSION_RC_URL_TIMEOUT=2 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  # After attempt 2: delay would be 10*2=20, capped to 15.
+  wait_for_pane "$SESSION_NAME" "backoff 15s" 30 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  assert_contains "$buf" "[cc-sv] backoff 15s..."
+}
+
+# --- C3: session naming -----------------------------------------------
+
+@test "C3: default session name is cc-YYYYMMDD-VERSION" {
+  # fake-claude --version returns CC_FAKE_CLAUDE_VERSION (default 2.1.185).
+  run "$CC_SESSION" -d "$TEST_DIR"
+  assert_eq "$status" 0
+  today="$(date +%Y%m%d)"
+  expected="cc-${today}-2-1-185"
+  # The output should mention the session name.
+  assert_contains "$output" "$expected"
+  # Clean up the auto-named session.
+  tmux kill-session -t "$expected" 2>/dev/null || true
+}
+
+@test "C3: explicit session name overrides the default" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  assert_contains "$output" "$SESSION_NAME"
+}
+
+@test "C3: CC_FAKE_CLAUDE_VERSION controls the version in the default name" {
+  CC_FAKE_CLAUDE_VERSION="3.0.0" \
+    run "$CC_SESSION" -d "$TEST_DIR"
+  assert_eq "$status" 0
+  today="$(date +%Y%m%d)"
+  expected="cc-${today}-3-0-0"
+  assert_contains "$output" "$expected"
+  tmux kill-session -t "$expected" 2>/dev/null || true
+}
+
+# --- C4: session_id ($NNN) addressing ----------------------------------
+
+@test "C4: session id is captured and used for tmux operations" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  # The session should have a numeric $NNN id assigned by tmux.
+  sid="$(tmux list-sessions -F '#{session_name} #{session_id}' 2>/dev/null \
+    | awk -v n="$SESSION_NAME" '$1 == n {print $2}')"
+  [ -n "$sid" ]
+  # Verify the id starts with $ (tmux convention).
+  assert_contains "$sid" '$'
+}
+
+@test "C4: post-launch background flow works via session_id (URL captured)" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "https://claude.ai/code?environment=env_FAKE" 30 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  state_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.url"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    [ -f "$state_file" ] && break
+    sleep 0.5
+  done
+  [ -f "$state_file" ]
+  url="$(cat "$state_file")"
+  assert_contains "$url" "https://claude.ai/code?environment=env_FAKE"
 }
