@@ -5,7 +5,7 @@
 set -euo pipefail
 
 PROG="${0##*/}"
-VERSION="0.7.0"
+VERSION="0.7.1"
 
 # Absolute, symlink-resolved path to this script. Captured at top-level
 # so --update can locate the enclosing git checkout.
@@ -202,6 +202,20 @@ OPTIONS
                       \`@cc-session-managed=1\`. Exit 0 iff at least one
                       inspected session is alive. Safe to call from
                       monitoring loops.
+    --metrics [NAME]  Output prometheus text exposition format for one
+                      or all managed sessions. Includes: cc_session_up,
+                      cc_session_auth_healthy, cc_session_uptime_seconds,
+                      cc_session_respawn_total, cc_session_last_error_epoch,
+                      cc_session_workers, cc_session_capacity.
+                      Safe to scrape from a prometheus exporter.
+    --ctl NAME CMD [ARGS...]
+                      Send a command to a running supervisor via its
+                      IPC pipe (/tmp/cc-session/<NAME>.ctl). Commands:
+                        health   — print current health snapshot
+                        respawn  — kill the current claude, supervisor
+                                   will restart it
+                        stop     — gracefully stop the supervisor
+                        send-keys TEXT — forward keystrokes via tmux
     -v, --version     Print version ($PROG $VERSION) and exit.
     -h, --help        Show this help and exit.
     -u, --update      Pull the latest cc-session from the upstream git
@@ -300,6 +314,10 @@ ENVIRONMENT
     CC_SESSION_SV_HEALTHY_THRESHOLD Seconds a claude process must survive
                                     to be considered a healthy run (resets
                                     failure counter + backoff). Default: 60.
+    CC_SESSION_SV_WATCHDOG_INTERVAL Health watchdog probe interval in
+                                    seconds. The supervisor periodically
+                                    probes auth and scrapes capacity.
+                                    Default: 60.
 
 POST-LAUNCH URL CAPTURE
 
@@ -553,6 +571,45 @@ read_state_url() {
   [[ -f "$f" ]] && cat "$f" 2>/dev/null || true
 }
 
+# --- State file paths for supervisor metrics / health / IPC ---------------
+state_dir_for() {
+  printf '%s/cc-session' "${TMPDIR:-/tmp}"
+}
+
+health_file_for() {
+  printf '%s/cc-session/%s.health' "${TMPDIR:-/tmp}" "$1"
+}
+
+prom_file_for() {
+  printf '%s/cc-session/%s.prom' "${TMPDIR:-/tmp}" "$1"
+}
+
+ctl_pipe_for() {
+  printf '%s/cc-session/%s.ctl' "${TMPDIR:-/tmp}" "$1"
+}
+
+# Atomically write content ($2) to a state file path ($1).
+write_state_file() {
+  local target="$1" content="$2"
+  local dir tmp
+  dir="$(dirname "$target")"
+  mkdir -p "$dir" 2>/dev/null || return 1
+  tmp="$target.tmp.$$"
+  printf '%s\n' "$content" > "$tmp" 2>/dev/null || return 1
+  mv -f "$tmp" "$target" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
+}
+
+# Remove all state files (.url, .health, .prom, .ctl) for a session.
+remove_state_all() {
+  local sess="$1"
+  remove_state_url "$sess"
+  rm -f "$(health_file_for "$sess")" 2>/dev/null || true
+  rm -f "$(prom_file_for "$sess")" 2>/dev/null || true
+  local ctl
+  ctl="$(ctl_pipe_for "$sess")"
+  [[ -p "$ctl" ]] && rm -f "$ctl" 2>/dev/null || true
+}
+
 # --- @cc-session-mode state machine helpers (levers ①⑤⑥⑦) -------------------
 # cc-session-created tmux sessions carry @cc-session-mode in addition to
 # @cc-session-managed:
@@ -711,6 +768,125 @@ print_status_all() {
     return 1
   fi
   return $(( found_alive ? 0 : 1 ))
+}
+
+# --- C6: prometheus metrics output ----------------------------------------
+# Read the .prom state file written by the supervisor watchdog and merge
+# with live tmux state. Output is prometheus text exposition format.
+print_metrics_one() {
+  local sess="$1"
+  local prom_file up=0 auth_healthy=0 uptime=0 respawn_total=0 last_error_epoch=0
+  local workers=0 capacity=0
+
+  if sess_exists "$sess"; then
+    local live_count=0 _pd
+    while IFS= read -r _pd; do
+      [[ "$_pd" == "0" ]] && live_count=$(( live_count + 1 ))
+    done < <(tmux list-panes -s -t "$sess" -F '#{pane_dead}' 2>/dev/null || true)
+    (( live_count > 0 )) && up=1
+    local created_epoch now_epoch
+    created_epoch="$(tmux display-message -p -t "$sess" '#{session_created}' 2>/dev/null || true)"
+    if [[ -n "$created_epoch" ]]; then
+      now_epoch=$(date +%s)
+      uptime=$(( now_epoch - created_epoch ))
+    fi
+  fi
+
+  prom_file="$(prom_file_for "$sess")"
+  if [[ -f "$prom_file" ]]; then
+    local _line _key _val
+    while IFS='=' read -r _key _val; do
+      case "$_key" in
+        auth_healthy)    auth_healthy="$_val" ;;
+        respawn_total)   respawn_total="$_val" ;;
+        last_error_epoch) last_error_epoch="$_val" ;;
+        workers)         workers="$_val" ;;
+        capacity)        capacity="$_val" ;;
+      esac
+    done < "$prom_file"
+  fi
+
+  local labels="session=\"$sess\""
+  printf '# HELP cc_session_up Whether the session pane process is alive.\n'
+  printf '# TYPE cc_session_up gauge\n'
+  printf 'cc_session_up{%s} %s\n' "$labels" "$up"
+  printf '# HELP cc_session_auth_healthy Whether the last auth probe succeeded.\n'
+  printf '# TYPE cc_session_auth_healthy gauge\n'
+  printf 'cc_session_auth_healthy{%s} %s\n' "$labels" "$auth_healthy"
+  printf '# HELP cc_session_uptime_seconds Seconds since the tmux session was created.\n'
+  printf '# TYPE cc_session_uptime_seconds gauge\n'
+  printf 'cc_session_uptime_seconds{%s} %s\n' "$labels" "$uptime"
+  printf '# HELP cc_session_respawn_total Total supervisor respawn count.\n'
+  printf '# TYPE cc_session_respawn_total counter\n'
+  printf 'cc_session_respawn_total{%s} %s\n' "$labels" "$respawn_total"
+  printf '# HELP cc_session_last_error_epoch Unix epoch of the last supervisor error.\n'
+  printf '# TYPE cc_session_last_error_epoch gauge\n'
+  printf 'cc_session_last_error_epoch{%s} %s\n' "$labels" "$last_error_epoch"
+  printf '# HELP cc_session_workers Current connected worker count.\n'
+  printf '# TYPE cc_session_workers gauge\n'
+  printf 'cc_session_workers{%s} %s\n' "$labels" "$workers"
+  printf '# HELP cc_session_capacity Total worker capacity.\n'
+  printf '# TYPE cc_session_capacity gauge\n'
+  printf 'cc_session_capacity{%s} %s\n' "$labels" "$capacity"
+}
+
+print_metrics_all() {
+  local found=0 sess
+  while IFS= read -r sess; do
+    [[ -z "$sess" ]] && continue
+    local marker
+    marker="$(tmux show-options -t "$sess" -v '@cc-session-managed' 2>/dev/null || true)"
+    [[ "$marker" != "1" ]] && continue
+    found=1
+    print_metrics_one "$sess"
+  done < <(tmux list-sessions -F '#{session_name}' 2>/dev/null || true)
+  (( found )) || { echo "# no managed sessions" >&2; return 1; }
+}
+
+# --- C5: IPC dispatch (--ctl) -------------------------------------------
+ctl_dispatch() {
+  local sess="$1" cmd="$2"; shift 2
+  local ctl
+  ctl="$(ctl_pipe_for "$sess")"
+
+  if ! sess_exists "$sess"; then
+    echo "$PROG: session '$sess' does not exist" >&2
+    return 1
+  fi
+
+  case "$cmd" in
+    health)
+      local hf
+      hf="$(health_file_for "$sess")"
+      if [[ -f "$hf" ]]; then
+        cat "$hf"
+      else
+        echo "$PROG: no health data for '$sess' (supervisor not running or no probe yet)" >&2
+        return 1
+      fi ;;
+    respawn)
+      if [[ ! -p "$ctl" ]]; then
+        echo "$PROG: no IPC pipe for '$sess' (supervisor not running?)" >&2
+        return 1
+      fi
+      printf 'respawn\n' > "$ctl" 2>/dev/null || { echo "$PROG: failed to write to IPC pipe" >&2; return 1; }
+      echo "$PROG: respawn command sent to '$sess'" ;;
+    stop)
+      if [[ ! -p "$ctl" ]]; then
+        echo "$PROG: no IPC pipe for '$sess' (supervisor not running?)" >&2
+        return 1
+      fi
+      printf 'stop\n' > "$ctl" 2>/dev/null || { echo "$PROG: failed to write to IPC pipe" >&2; return 1; }
+      echo "$PROG: stop command sent to '$sess'" ;;
+    send-keys)
+      [[ -z "${1:-}" ]] && { echo "$PROG: send-keys requires text argument" >&2; return 2; }
+      tmux send-keys -t "$sess" "$@" 2>/dev/null || { echo "$PROG: tmux send-keys failed" >&2; return 1; }
+      echo "$PROG: keys sent to '$sess'" ;;
+    *)
+      echo "$PROG: unknown --ctl command: $cmd" >&2
+      echo "       Available: health, respawn, stop, send-keys" >&2
+      return 2 ;;
+  esac
 }
 
 # Pattern for Remote Control URLs surfaced in claude's TUI. Two shapes
@@ -972,6 +1148,24 @@ while (( $# )); do
         print_status_all
         exit $?
       fi ;;
+    --metrics)
+      # --metrics [SESSION_NAME]
+      # Output prometheus textformat metrics for one or all sessions.
+      shift
+      if [[ -n "${1:-}" ]]; then
+        print_metrics_one "$1"
+      else
+        print_metrics_all
+      fi
+      exit $? ;;
+    --ctl)
+      # --ctl <SESSION_NAME> <CMD> [ARGS...]
+      # Send a command to a running supervisor via its IPC pipe.
+      [[ -z "${2:-}" ]] && { echo "$PROG: --ctl requires a session name" >&2; exit 2; }
+      [[ -z "${3:-}" ]] && { echo "$PROG: --ctl requires a command (health|respawn|stop|send-keys)" >&2; exit 2; }
+      ctl_session="$2"; ctl_cmd="$3"; shift 3
+      ctl_dispatch "$ctl_session" "$ctl_cmd" "$@"
+      exit $? ;;
     -k|--kill)
       [[ -z "${2:-}" ]] && { echo "$PROG: --kill requires a session name" >&2; exit 2; }
       # Clean state file alongside the tmux session — a stale .url
@@ -985,11 +1179,15 @@ while (( $# )); do
       # teleport when no exact `claude` is present (see sess_exists).
       kill_exit=0
       if sess_exists "$2"; then
+        # Send stop command to supervisor via IPC before killing tmux.
+        _ctl="$(ctl_pipe_for "$2")"
+        [[ -p "$_ctl" ]] && printf 'stop\n' > "$_ctl" 2>/dev/null || true
+        sleep 0.2
         tmux kill-session -t "$2" 2>/dev/null || kill_exit=$?
       else
         kill_exit=1
       fi
-      remove_state_url "$2"
+      remove_state_all "$2"
       exit "$kill_exit" ;;
     -d|--detach)
       DETACH=1; shift ;;
@@ -1434,8 +1632,8 @@ if [[ -n "$TELEPORT_ID" ]] || [[ -n "$RESUME_UUID" ]]; then
     # @cc-session-mode to protect — preserve the prior recycle
     # behaviour so older live sessions still upgrade cleanly.
     tmux kill-session -t "$SESSION_NAME"
-    # Wipe the now-stale state file too — same hygiene as --kill.
-    remove_state_url "$SESSION_NAME"
+    # Wipe the now-stale state files too — same hygiene as --kill.
+    remove_state_all "$SESSION_NAME"
   fi
 else
   # Default launch: server-mode RC. Append the subcommand here so the
@@ -1472,49 +1670,183 @@ fi
 
 # --- Supervisor wrapper (server-mode only) -----------------------------------
 # Teleport is single-use — no respawn. Server-mode wraps claude in a
-# supervisor loop with circuit breaker, exponential backoff, and pre-
-# respawn auth probe. The supervisor runs inside the tmux pane; its log
+# supervisor loop with circuit breaker, exponential backoff, pre-respawn
+# auth probe, periodic health watchdog (C7), IPC pipe (C5), and prom
+# state writer (C6). The supervisor runs inside the tmux pane; its log
 # lines are prefixed [cc-sv] so they're distinguishable from claude output.
 CC_SV_MAX_FAILS="${CC_SESSION_SV_MAX_FAILS:-5}"
 CC_SV_BACKOFF_BASE="${CC_SESSION_SV_BACKOFF_BASE:-5}"
 CC_SV_BACKOFF_MAX="${CC_SESSION_SV_BACKOFF_MAX:-60}"
 CC_SV_HEALTHY_THRESHOLD="${CC_SESSION_SV_HEALTHY_THRESHOLD:-60}"
+CC_SV_WATCHDOG_INTERVAL="${CC_SESSION_SV_WATCHDOG_INTERVAL:-60}"
 
 if [[ "$CC_MODE" == server ]]; then
   # Build the inner command string that the supervisor will exec on each
   # attempt. printf %q quotes each element for safe eval inside bash -lc.
   _SV_INNER="$(printf '%q ' "${LAUNCH_CMD[@]}")"
-  # The supervisor is a self-contained bash snippet passed to the pane.
-  # It replaces the direct `exec claude remote-control` so the pane
-  # process tree is: bash(supervisor) → claude(child).
+  # Paths baked into the supervisor script (expanded at construction time).
+  _SV_HEALTH_FILE="$(health_file_for "$SESSION_NAME")"
+  _SV_PROM_FILE="$(prom_file_for "$SESSION_NAME")"
+  _SV_CTL_PIPE="$(ctl_pipe_for "$SESSION_NAME")"
+  _SV_STATE_DIR="$(state_dir_for)"
+  _SV_CLAUDE_BIN="$(printf '%q' "$CLAUDE_BIN")"
+  _SV_SESSION_ID_TARGET="$SESSION_NAME"
+
   _SV_SCRIPT='
     fails=0; delay='"$CC_SV_BACKOFF_BASE"'
+    respawn_total=0; auth_healthy=1; last_error_epoch=0
+    health_file='"$(printf '%q' "$_SV_HEALTH_FILE")"'
+    prom_file='"$(printf '%q' "$_SV_PROM_FILE")"'
+    ctl_pipe='"$(printf '%q' "$_SV_CTL_PIPE")"'
+    state_dir='"$(printf '%q' "$_SV_STATE_DIR")"'
+    claude_bin='"$_SV_CLAUDE_BIN"'
+    sv_target='"$(printf '%q' "$_SV_SESSION_ID_TARGET")"'
+    watchdog_interval='"$CC_SV_WATCHDOG_INTERVAL"'
+    watchdog_pid=""
+    ctl_pid=""
+    child=""
+
+    # Write prom state file (atomic via tmp+mv).
+    write_prom() {
+      local workers="${1:-0}" capacity="${2:-0}"
+      mkdir -p "$state_dir" 2>/dev/null || return
+      local tmp="$prom_file.tmp.$$"
+      printf "auth_healthy=%s\nrespawn_total=%s\nlast_error_epoch=%s\nworkers=%s\ncapacity=%s\n" \
+        "$auth_healthy" "$respawn_total" "$last_error_epoch" "$workers" "$capacity" \
+        > "$tmp" 2>/dev/null && mv -f "$tmp" "$prom_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    }
+
+    # Write health file (human-readable snapshot).
+    write_health() {
+      mkdir -p "$state_dir" 2>/dev/null || return
+      local tmp="$health_file.tmp.$$"
+      printf "status: %s\nauth: %s\nrespawns: %s\nlast_error: %s\nwatchdog_interval: %ss\npid: %s\n" \
+        "$1" "$( (( auth_healthy )) && echo ok || echo failed )" \
+        "$respawn_total" "$last_error_epoch" "$watchdog_interval" "${child:-none}" \
+        > "$tmp" 2>/dev/null && mv -f "$tmp" "$health_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    }
+
+    # Scrape workers/capacity from tmux pane (best-effort).
+    scrape_capacity() {
+      local cap_line
+      cap_line="$(tmux capture-pane -t "$sv_target" -p -S -20 2>/dev/null \
+        | grep -oE "Capacity: [0-9]+/[0-9]+" | tail -1 || true)"
+      if [[ -n "$cap_line" ]]; then
+        printf "%s" "$cap_line" | sed "s/Capacity: //" | tr "/" " "
+      else
+        printf "0 0"
+      fi
+    }
+
+    # C7: health watchdog — periodic auth probe + capacity scrape.
+    start_watchdog() {
+      (
+        while true; do
+          sleep "$watchdog_interval"
+          if "$claude_bin" auth status >/dev/null 2>&1; then
+            auth_healthy=1
+          else
+            auth_healthy=0
+            last_error_epoch=$(date +%s)
+            echo "[cc-sv] watchdog: auth probe FAILED"
+          fi
+          read -r w c <<< "$(scrape_capacity)"
+          write_prom "$w" "$c"
+          write_health running
+        done
+      ) &
+      watchdog_pid=$!
+    }
+
+    # C5: IPC pipe reader — process commands from --ctl.
+    start_ctl_reader() {
+      mkdir -p "$state_dir" 2>/dev/null || return
+      rm -f "$ctl_pipe" 2>/dev/null
+      mkfifo "$ctl_pipe" 2>/dev/null || return
+      (
+        while true; do
+          if [[ -p "$ctl_pipe" ]]; then
+            while IFS= read -r cmd; do
+              case "$cmd" in
+                respawn)
+                  echo "[cc-sv] IPC: respawn requested"
+                  [[ -n "$child" ]] && kill "$child" 2>/dev/null || true ;;
+                stop)
+                  echo "[cc-sv] IPC: stop requested"
+                  [[ -n "$child" ]] && kill "$child" 2>/dev/null || true
+                  touch "$ctl_pipe.stop" 2>/dev/null || true ;;
+                *)
+                  echo "[cc-sv] IPC: unknown command: $cmd" ;;
+              esac
+            done < "$ctl_pipe"
+          else
+            sleep 1
+          fi
+        done
+      ) &
+      ctl_pid=$!
+    }
+
+    cleanup() {
+      [[ -n "$watchdog_pid" ]] && kill "$watchdog_pid" 2>/dev/null || true
+      [[ -n "$ctl_pid" ]] && kill "$ctl_pid" 2>/dev/null || true
+      rm -f "$ctl_pipe" "$ctl_pipe.stop" 2>/dev/null || true
+    }
+    trap cleanup EXIT
+
+    start_watchdog
+    start_ctl_reader
+    write_health starting
+    write_prom 0 0
+
     while true; do
+      # Check IPC stop flag.
+      if [[ -f "$ctl_pipe.stop" ]]; then
+        echo "[cc-sv] stop flag set — exiting"
+        rm -f "$ctl_pipe.stop" 2>/dev/null
+        break
+      fi
       echo "[cc-sv] starting claude (attempt $((fails+1)), backoff=${delay}s)"
       start_ts=$(date +%s)
       '"$_SV_INNER"' &
       child=$!
+      write_health running
+      read -r w c <<< "$(scrape_capacity)"
+      write_prom "$w" "$c"
       wait "$child" 2>/dev/null
       rc=$?
+      child=""
       elapsed=$(( $(date +%s) - start_ts ))
       echo "[cc-sv] claude exited rc=$rc after ${elapsed}s"
+      # Check IPC stop flag after wait.
+      if [[ -f "$ctl_pipe.stop" ]]; then
+        echo "[cc-sv] stop flag set — exiting"
+        rm -f "$ctl_pipe.stop" 2>/dev/null
+        break
+      fi
       if (( elapsed >= '"$CC_SV_HEALTHY_THRESHOLD"' )); then
         fails=0; delay='"$CC_SV_BACKOFF_BASE"'
         echo "[cc-sv] ran >'"$CC_SV_HEALTHY_THRESHOLD"'s — resetting circuit breaker"
       else
         fails=$((fails + 1))
+        last_error_epoch=$(date +%s)
       fi
       if (( fails >= '"$CC_SV_MAX_FAILS"' )); then
         echo "[cc-sv] CIRCUIT BREAKER: $fails consecutive failures — stopping"
         break
       fi
-      claude_bin='"$(printf '%q' "$CLAUDE_BIN")"'
+      respawn_total=$((respawn_total + 1))
       echo "[cc-sv] pre-respawn auth probe..."
       if ! "$claude_bin" auth status >/dev/null 2>&1; then
+        auth_healthy=0
+        last_error_epoch=$(date +%s)
         echo "[cc-sv] auth probe FAILED — waiting ${delay}s before retry"
       else
+        auth_healthy=1
         echo "[cc-sv] auth probe OK"
       fi
+      write_health respawning
+      write_prom 0 0
       echo "[cc-sv] backoff ${delay}s..."
       sleep "$delay"
       delay=$(( delay * 2 ))
@@ -1732,7 +2064,7 @@ fi
         reap_pd="$(tmux list-panes -s -t "$_T" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
         if [[ "$reap_pd" == "1" ]]; then
           emit_audit reap teleport "$cc_kind" "$cc_req_id" "$SESSION_NAME" "$cc_full" "$PROJECT_DIR" "" pane-dead
-          remove_state_url "$SESSION_NAME"
+          remove_state_all "$SESSION_NAME"
           tmux kill-session -t "$_T" 2>/dev/null || true
           break
         fi
@@ -1750,7 +2082,7 @@ fi
         fi
         if (( reap_idle_secs >= idle_min * 60 )); then
           emit_audit reap teleport "$cc_kind" "$cc_req_id" "$SESSION_NAME" "$cc_full" "$PROJECT_DIR" "" idle
-          remove_state_url "$SESSION_NAME"
+          remove_state_all "$SESSION_NAME"
           tmux kill-session -t "$_T" 2>/dev/null || true
           break
         fi
