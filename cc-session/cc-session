@@ -1791,8 +1791,6 @@ if [[ "$CC_MODE" == server ]]; then
       [[ -n "$watchdog_pid" ]] && kill "$watchdog_pid" 2>/dev/null || true
       [[ -n "$ctl_pid" ]] && kill "$ctl_pid" 2>/dev/null || true
       rm -f "$ctl_pipe" "$ctl_pipe.stop" 2>/dev/null || true
-      write_health stopped
-      write_prom 0 0
     }
     trap cleanup EXIT
 

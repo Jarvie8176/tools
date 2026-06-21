@@ -1790,7 +1790,10 @@ mk_repo() {
   done
   run "$CC_SESSION" --kill "$SESSION_NAME"
   assert_eq "$status" 0
+  # Brief settle for any async cleanup from supervisor EXIT trap.
+  sleep 0.5
   [ ! -p "$ctl_pipe" ]
   [ ! -f "${BATS_TMPDIR}/cc-session/$SESSION_NAME.url" ]
   [ ! -f "${BATS_TMPDIR}/cc-session/$SESSION_NAME.health" ]
+  [ ! -f "${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom" ]
 }
