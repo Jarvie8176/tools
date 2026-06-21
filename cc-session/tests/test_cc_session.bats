@@ -47,7 +47,16 @@ teardown() {
   done
   rm -rf "$TEST_DIR" \
          "${BATS_TMPDIR}/cc-session/$SESSION_NAME.url" \
-         "${BATS_TMPDIR}/cc-session/cc-"*.url
+         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.health" \
+         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom" \
+         "${BATS_TMPDIR}/cc-session/cc-"*.url \
+         "${BATS_TMPDIR}/cc-session/cc-"*.health \
+         "${BATS_TMPDIR}/cc-session/cc-"*.prom
+  # Clean up named pipes.
+  for _p in "${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl" \
+            "${BATS_TMPDIR}"/cc-session/cc-*.ctl; do
+    [ -p "$_p" ] && rm -f "$_p" 2>/dev/null || true
+  done
 }
 
 # --- Assertion helpers (non-final-line safe) -------------------------
@@ -1617,4 +1626,171 @@ mk_repo() {
   [ -f "$state_file" ]
   url="$(cat "$state_file")"
   assert_contains "$url" "https://claude.ai/code?environment=env_FAKE"
+}
+
+# ====================================================================
+# v0.7 P2: IPC, metrics, health watchdog
+# ====================================================================
+
+# --- C7: health watchdog -----------------------------------------------
+
+@test "C7: supervisor writes .health file" {
+  CC_SESSION_SV_WATCHDOG_INTERVAL=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  health_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.health"
+  for _ in $(seq 1 20); do
+    [ -f "$health_file" ] && break
+    sleep 0.5
+  done
+  [ -f "$health_file" ]
+  hc="$(cat "$health_file")"
+  assert_contains "$hc" "status:"
+  assert_contains "$hc" "auth:"
+}
+
+@test "C7: supervisor writes .prom file with auth_healthy" {
+  CC_SESSION_SV_WATCHDOG_INTERVAL=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  prom_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom"
+  for _ in $(seq 1 20); do
+    [ -f "$prom_file" ] && break
+    sleep 0.5
+  done
+  [ -f "$prom_file" ]
+  pc="$(cat "$prom_file")"
+  assert_contains "$pc" "auth_healthy="
+  assert_contains "$pc" "respawn_total="
+}
+
+# --- C6: metrics output -----------------------------------------------
+
+@test "C6: --metrics outputs prometheus textformat for a live session" {
+  CC_SESSION_SV_WATCHDOG_INTERVAL=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  # Wait for prom file to exist.
+  prom_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom"
+  for _ in $(seq 1 20); do
+    [ -f "$prom_file" ] && break
+    sleep 0.5
+  done
+  run "$CC_SESSION" --metrics "$SESSION_NAME"
+  assert_eq "$status" 0
+  assert_contains "$output" "cc_session_up"
+  assert_contains "$output" "cc_session_auth_healthy"
+  assert_contains "$output" "cc_session_uptime_seconds"
+  assert_contains "$output" "cc_session_respawn_total"
+  assert_contains "$output" "# TYPE cc_session_up gauge"
+}
+
+@test "C6: --metrics with no arg lists all managed sessions" {
+  CC_SESSION_SV_WATCHDOG_INTERVAL=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  prom_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom"
+  for _ in $(seq 1 20); do
+    [ -f "$prom_file" ] && break
+    sleep 0.5
+  done
+  run "$CC_SESSION" --metrics
+  assert_eq "$status" 0
+  assert_contains "$output" "session=\"$SESSION_NAME\""
+}
+
+# --- C5: IPC (--ctl) ---------------------------------------------------
+
+@test "C5: supervisor creates .ctl named pipe" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  ctl_pipe="${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl"
+  for _ in $(seq 1 20); do
+    [ -p "$ctl_pipe" ] && break
+    sleep 0.5
+  done
+  [ -p "$ctl_pipe" ]
+}
+
+@test "C5: --ctl health reads the health file" {
+  CC_SESSION_SV_WATCHDOG_INTERVAL=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  health_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.health"
+  for _ in $(seq 1 20); do
+    [ -f "$health_file" ] && break
+    sleep 0.5
+  done
+  run "$CC_SESSION" --ctl "$SESSION_NAME" health
+  assert_eq "$status" 0
+  assert_contains "$output" "status:"
+  assert_contains "$output" "auth:"
+}
+
+@test "C5: --ctl respawn kills current claude, supervisor restarts" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  # Wait for supervisor to be running.
+  wait_for_pane "$SESSION_NAME" "[cc-sv] starting claude" 10 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  ctl_pipe="${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl"
+  for _ in $(seq 1 10); do
+    [ -p "$ctl_pipe" ] && break
+    sleep 0.5
+  done
+  run "$CC_SESSION" --ctl "$SESSION_NAME" respawn
+  assert_eq "$status" 0
+  assert_contains "$output" "respawn command sent"
+  # Wait for the respawn to show up in the pane.
+  sleep 2
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  assert_contains "$buf" "[cc-sv] IPC: respawn requested"
+}
+
+@test "C5: --ctl stop gracefully stops the supervisor" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  wait_for_pane "$SESSION_NAME" "[cc-sv] starting claude" 10 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  ctl_pipe="${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl"
+  for _ in $(seq 1 10); do
+    [ -p "$ctl_pipe" ] && break
+    sleep 0.5
+  done
+  run "$CC_SESSION" --ctl "$SESSION_NAME" stop
+  assert_eq "$status" 0
+  # Wait for supervisor to process stop and exit.
+  wait_for_pane "$SESSION_NAME" "stop flag set" 15 \
+    || wait_for_pane "$SESSION_NAME" "supervisor stopped" 10 \
+    || true
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  assert_contains "$buf" "[cc-sv] IPC: stop requested"
+}
+
+@test "C5: --ctl with unknown command exits 2" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  run "$CC_SESSION" --ctl "$SESSION_NAME" bogus
+  assert_eq "$status" 2
+  assert_contains "$output" "unknown --ctl command"
+}
+
+@test "C5: --ctl without session name exits 2" {
+  run "$CC_SESSION" --ctl
+  assert_eq "$status" 2
+}
+
+@test "C5: --kill cleans up all state files including .ctl pipe" {
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  ctl_pipe="${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl"
+  for _ in $(seq 1 10); do
+    [ -p "$ctl_pipe" ] && break
+    sleep 0.5
+  done
+  run "$CC_SESSION" --kill "$SESSION_NAME"
+  assert_eq "$status" 0
+  [ ! -p "$ctl_pipe" ]
+  [ ! -f "${BATS_TMPDIR}/cc-session/$SESSION_NAME.url" ]
+  [ ! -f "${BATS_TMPDIR}/cc-session/$SESSION_NAME.health" ]
 }
