@@ -87,9 +87,24 @@ case " $* " in
     # capture-pane later. Echo received lines back as
     # "server stdin: <line>" so tests can detect any unexpected
     # keystroke (e.g. a buggy /remote-control sent into server mode).
-    while IFS= read -r line; do
-      printf 'server stdin: %s\n' "$line"
-    done
+    #
+    # CC_FAKE_CLAUDE_SERVE_FOREVER: the real `claude remote-control` is a
+    # server that does NOT depend on stdin — it stays alive regardless. The
+    # default read-loop stub instead exits on EOF, which happens immediately
+    # when the supervisor backgrounds it (`cmd &` → stdin /dev/null in a
+    # non-interactive shell). Tests that need to observe a STABLE live child
+    # (real pid, IPC respawn) set this knob so the stub mimics the real
+    # server's stay-alive behavior. read||sleep keeps the stray-keystroke
+    # echo working while never exiting on EOF.
+    if [ "${CC_FAKE_CLAUDE_SERVE_FOREVER:-}" = 1 ]; then
+      while :; do
+        if IFS= read -r line; then printf 'server stdin: %s\n' "$line"; else sleep 0.5; fi
+      done
+    else
+      while IFS= read -r line; do
+        printf 'server stdin: %s\n' "$line"
+      done
+    fi
     exit 0
     ;;
   *' --teleport '*)

@@ -355,8 +355,11 @@ autoname_for() {
 @test "supervisor health reports a real child PID, not 'none' (N1 file-backed state)" {
   # Pre-hardening the watchdog subshell could not see the parent's \$child
   # var (copied by value at fork) so pid: was always 'none'. With the child
-  # pid file-backed it is a real PID.
-  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  # pid file-backed it is a real PID. SERVE_FOREVER keeps the stub child
+  # alive (the real claude server is stdin-independent; the default stub
+  # exits on EOF when backgrounded) so we can observe a stable pid.
+  CC_FAKE_CLAUDE_SERVE_FOREVER=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
   health="${BATS_TMPDIR}/cc-session/$SESSION_NAME.health"
   for _ in $(seq 1 20); do
@@ -370,9 +373,11 @@ autoname_for() {
 
 @test "--ctl respawn actually replaces the running child (N2 IPC works)" {
   # Pre-hardening the ctl reader tested an always-empty \$child, so respawn
-  # was a no-op. With the child pid file-backed it can signal it. fake-claude
-  # 'remote-control' blocks (long-lived) so child #1 stays up until respawn.
-  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  # was a no-op. With the child pid file-backed it can signal it.
+  # SERVE_FOREVER keeps the stub child alive so child #1 stays up until the
+  # respawn kills it (the default stub exits on EOF when backgrounded).
+  CC_FAKE_CLAUDE_SERVE_FOREVER=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
   pstate="${BATS_TMPDIR}/cc-session/$SESSION_NAME.pstate"
   for _ in $(seq 1 20); do
