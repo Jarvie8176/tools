@@ -1,7 +1,9 @@
 # EDD — RC cold-boot resilience hardening
 
 Status: **Draft** · Driver: homelab-ops#1222 (rpi RC backbone DR drill **FAILED**)
-Scope: `cc-session` supervisor (A startup gate · B non-terminal backoff + monitoring · D real health probe)
+Scope: `cc-session` supervisor + teleport/resume paths
+(A startup gate · B non-terminal backoff + monitoring · D real health probe +
+file-backed state · E impl-review defects: #1 CLAUDE_BIN, #5 send-keys, N4 SIGTERM)
 Out of scope: C credential exclusivity — **closed**, ccrc now holds its own (post-rotation) refresh token at `~/.claude/.credentials.json`.
 
 ## 1. Problem
@@ -116,32 +118,86 @@ is guaranteed by B.
   `rate(cc_session_respawn_total[15m])` spike. Beszel is display-only; alerting
   goes through Prometheus + Alertmanager.
 
-### D — real health probe
+### D — real health probe + file-backed supervisor state
 
-Replace the local-only `claude auth status` probe with an RC-connectivity
-signal derived from the pane the daemon already prints to:
+**Root cause uncovered by impl review (N1, fork-by-value):** the supervisor
+shares `child` / `auth_healthy` / `respawn_total` / `last_error_epoch` across
+THREE processes (main loop + watchdog `&` + ctl_reader `&`) via plain shell
+vars. `&` forks copy-by-value, so the subshells never see the parent's
+assignments. This single wrong abstraction simultaneously breaks:
+- **`pid: none`** — the watchdog snapshotted `child=""` at fork (the original
+  defect #4).
+- **`--ctl respawn` / `--ctl stop` are no-ops** (N2) — ctl_reader tests `$child`
+  (always empty) → it cannot kill the running claude; `stop` only takes effect
+  after claude exits on its own.
+- **`respawn_total` flaps to 0** — the watchdog's `write_prom` writes its stale
+  snapshot over the parent's real counter via the atomic `mv`.
 
+**Fix = make shared supervisor state file-backed (single source of truth):**
+- Write the live child pid and the counters to small files under
+  `$state_dir` on each spawn/exit; watchdog + ctl_reader + `write_health` /
+  `write_prom` READ from those files, never from in-memory vars. This resolves
+  #4, N1, and N2 together and makes B/D compose cleanly.
+
+**Health signal (replaces the false-positive `auth status` probe, #3):**
 - `auth_healthy` / `up` ← `tmux capture-pane | grep -q '✔︎· Connected'`
-  (the daemon prints `·✔︎· Connected` on success, reconnect text on drop).
+  (daemon prints `·✔︎· Connected` on success, reconnect text on drop).
+  Demote `claude auth status` to a secondary cred-state field, not the up signal.
 - Capture and export the live `env_<id>` (and `Capacity n/32`) into
-  `claude.health` / `claude.prom` as `cc_session_rc_env` /
-  `cc_session_capacity`.
-- Fix `pid` reporting: the watchdog subshell must read the child pid from a
-  shared file/var, not the unset `child` local (currently always `none`).
-- `is-active` accuracy: prefer the pane-liveness signal in metrics; the
-  systemd `Type=forking` limitation is documented but `cc_session_up` is the
-  source of truth.
+  `claude.health` / `claude.prom` as `cc_session_rc_env` / `cc_session_capacity`.
+- `is-active` accuracy: `cc_session_up` (pane liveness) is the source of truth;
+  the systemd `Type=forking` mismatch is documented, not relied upon.
+
+### E — additional defects (from impl review, not in original draft)
+
+- **#1 `CLAUDE_BIN` unbound (ordering).** `$CLAUDE_BIN` is dereferenced in the
+  default-`SESSION_NAME` block (~line 1313) before the resolver runs (~1328).
+  Under `set -u`, with `CLAUDE_BIN` unset (the normal case — templates leave it
+  commented), every name-auto-deriving invocation (incl. `--teleport` /
+  `--resume`) leaks `CLAUDE_BIN: unbound variable` to stderr (reproduced twice
+  during the session-recovery work). Fix: relocate the resolver above line 1305.
+- **#5 send-keys idle-readiness.** After the resume-choice keypress the
+  readiness gate is a hard-coded `sleep 2` before `enable_remote_control`, which
+  then polls only ~10 s. A 6.4 MB transcript took ~5 min to load → `/remote-control`
+  fired into the still-loading TUI, landing in the autocomplete menu /
+  mis-submitted (observed live; corrupted one recovered turn). Fix: poll for an
+  idle-prompt marker before sending; scale the wait with the resume timeout;
+  raise the teleport/resume `enable_remote_control` poll ceiling.
+- **N4 SIGTERM trap.** The supervisor only `trap`s EXIT (kills watchdog/ctl,
+  not the claude child). `systemctl stop` / `Restart` SIGTERM can orphan the
+  claude process; only `ExecStop=cc-session --kill` reaps it. Add
+  `trap 'kill "$child"…; cleanup' TERM INT` (child read from the state file).
+- **N3 `$TMUX` nesting guard (Lo).** `exec tmux attach` from inside an existing
+  tmux refuses; guard with `[[ -n "$TMUX" ]]` → `switch-client` / print hint.
 
 ## 4. Verification
 
-1. Unit / dummy-harness tests under `tests/` (bats, `env -u TMUX`): simulate
-   N early failures → assert supervisor keeps retrying (no exit) and metrics
-   show `circuit_open=1`.
+1. Unit / dummy-harness tests under `tests/` (bats, `env -u TMUX`):
+   - supervisor keeps retrying after `MAX_FAILS` (no exit) + `circuit_open=1` (B).
+   - `pid:` is a real PID and `respawn_total` is non-zero/stable across a
+     watchdog interval (regression guard for N1).
+   - `--ctl respawn`/`stop` actually kill the child (N2), not just log.
+   - `env -u CLAUDE_BIN` invocation produces no stderr (#1).
+   - slow-transcript fixture → `/remote-control` lands at an idle prompt (#5).
 2. **A validation** (open question above) — expired-token refresh experiment.
 3. **DR drill** (operator-gated, homelab-ops#1222 close criterion): cold boot
    → assert within ~2 min `cc_session_up=1`, RC Connected, no manual step.
 
-## 5. Rollout
+## 5. Prioritized fix list (single PR)
+
+- **P0 (cold-boot availability):** #2 non-terminal breaker + `Restart=always` ·
+  #3 real RC probe · **N1 file-backed state** (fixes #4 pid + N2 dead IPC) ·
+  #1 CLAUDE_BIN ordering.
+- **P1 (robustness):** #5 send-keys idle-readiness · N4 SIGTERM trap ·
+  §A startup gate (optional, gated on the `claude -p` refresh validation).
+- **P2 (hygiene):** N3 `$TMUX` guard · tests above · bash-3.2 CI leg.
+
+Verdict (impl review): architecture is **sound — patch, don't rewrite**. The
+CLI/state-machine layer stays; only the supervisor's shared-state model is
+reworked (file-backed). Extracting the inline heredoc into a shipped
+`cc-session __supervise` sub-script is a sensible **follow-up**, not this PR.
+
+## 6. Rollout
 
 - PR to Jarvie8176/tools (cc-session). Bump patch version; regenerate the
   inline supervisor.
