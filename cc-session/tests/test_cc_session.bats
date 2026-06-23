@@ -49,9 +49,14 @@ teardown() {
          "${BATS_TMPDIR}/cc-session/$SESSION_NAME.url" \
          "${BATS_TMPDIR}/cc-session/$SESSION_NAME.health" \
          "${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom" \
+         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.pstate" \
+         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.wstate" \
+         "${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl.stop" \
          "${BATS_TMPDIR}/cc-session/cc-"*.url \
          "${BATS_TMPDIR}/cc-session/cc-"*.health \
-         "${BATS_TMPDIR}/cc-session/cc-"*.prom
+         "${BATS_TMPDIR}/cc-session/cc-"*.prom \
+         "${BATS_TMPDIR}/cc-session/cc-"*.pstate \
+         "${BATS_TMPDIR}/cc-session/cc-"*.wstate
   # Clean up named pipes.
   for _p in "${BATS_TMPDIR}/cc-session/$SESSION_NAME.ctl" \
             "${BATS_TMPDIR}"/cc-session/cc-*.ctl; do
@@ -281,22 +286,55 @@ autoname_for() {
   refute_contains "$output" "session: $SESSION_NAME"
 }
 
-@test "remain-on-exit preserves crashed pane buffer and --status reports alive=no" {
-  # Launch with a claude stub that exits immediately. Without
-  # remain-on-exit the pane would be destroyed and its scrollback wiped
-  # — making the crash undebuggable. With the option the pane stays
-  # with pane_dead=1, scrollback intact, and --status flips alive→no.
-  # SV_MAX_FAILS=1 + SV_BACKOFF_BASE=1 so the supervisor circuit-breaks
-  # immediately after the single crash and the pane dies quickly.
+@test "server crash-loop: non-terminal breaker keeps supervisor alive, circuit opens" {
+  # Pre-hardening this test expected pane_dead=1: the supervisor circuit-broke
+  # and exited rc=0 after the crash. That clean-exit-on-failure is exactly what
+  # stranded the backbone after a cold-boot transient (homelab-ops#1222). The
+  # breaker is now NON-terminal: the supervisor keeps respawning under long
+  # backoff, so the pane (the supervisor) stays alive and circuit_open flips 1.
   CC_FAKE_CLAUDE_CRASH=1 \
     CC_SESSION_RC_URL_TIMEOUT=2 \
-    CC_SESSION_SV_MAX_FAILS=1 \
+    CC_SESSION_SV_MAX_FAILS=2 \
     CC_SESSION_SV_BACKOFF_BASE=1 \
+    CC_SESSION_SV_BACKOFF_MAX=1 \
+    CC_SESSION_SV_HEALTHY_THRESHOLD=60 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
 
-  # Wait for the stub to exit and the background URL-poll to notice.
-  # The early-exit branch should fire within ~0.5s once pane_dead=1.
+  prom="${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom"
+  # Wait for the circuit to open (>= MAX_FAILS crash/respawn cycles).
+  for _ in $(seq 1 40); do
+    grep -q '^circuit_open=1' "$prom" 2>/dev/null && break
+    sleep 0.5
+  done
+  assert_contains "$(cat "$prom" 2>/dev/null)" "circuit_open=1"
+  # Never reached a Connected state.
+  assert_contains "$(cat "$prom" 2>/dev/null)" "rc_connected=0"
+
+  # The supervisor pane is STILL alive — it did not self-exit on failure.
+  pd="$(tmux list-panes -s -t "$SESSION_NAME" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+  assert_eq "$pd" "0"
+
+  # The crash output is still capturable (scrollback intact across respawns).
+  buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -500 2>/dev/null)"
+  assert_contains "$buf" "FAKE CLAUDE: crashing on purpose"
+
+  # --status reports alive=yes: the supervisor is up and retrying.
+  run "$CC_SESSION" --status "$SESSION_NAME"
+  assert_eq "$status" 0
+  assert_contains "$output" "alive: yes"
+}
+
+@test "teleport-mode crash leaves a dead pane and --status reports alive=no" {
+  # Teleport/resume launches are single-use (no supervisor): a crash leaves
+  # the pane dead, remain-on-exit preserves the buffer, --status → alive=no.
+  # (This is the dead-pane coverage the old server-mode test used to give.)
+  CC_FAKE_CLAUDE_CRASH=1 \
+    CC_SESSION_RESUME_TIMEOUT=2 \
+    CC_SESSION_RC_URL_TIMEOUT=2 \
+    run "$CC_SESSION" -d -t "session_TESTdeadbeef" "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+
   for _ in 1 2 3 4 5 6 7 8 9 10; do
     pd="$(tmux list-panes -s -t "$SESSION_NAME" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
     [ "$pd" = "1" ] && break
@@ -304,16 +342,57 @@ autoname_for() {
   done
   assert_eq "$pd" "1"
 
-  # Crash output (stdout AND stderr) must still be capturable.
   buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200 2>/dev/null)"
   assert_contains "$buf" "FAKE CLAUDE: crashing on purpose"
   assert_contains "$buf" "FAKE CLAUDE: stderr line"
 
-  # --status must report alive=no even though tmux has-session=true.
   run "$CC_SESSION" --status "$SESSION_NAME"
   assert_eq "$status" 1
   assert_contains "$output" "alive: no"
   assert_contains "$output" "managed: yes"
+}
+
+@test "supervisor health reports a real child PID, not 'none' (N1 file-backed state)" {
+  # Pre-hardening the watchdog subshell could not see the parent's \$child
+  # var (copied by value at fork) so pid: was always 'none'. With the child
+  # pid file-backed it is a real PID.
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  health="${BATS_TMPDIR}/cc-session/$SESSION_NAME.health"
+  for _ in $(seq 1 20); do
+    grep -qE '^pid: [0-9]+' "$health" 2>/dev/null && break
+    sleep 0.5
+  done
+  pidline="$(grep '^pid:' "$health" 2>/dev/null || true)"
+  assert_contains "$pidline" "pid: "
+  refute_contains "$pidline" "none"
+}
+
+@test "--ctl respawn actually replaces the running child (N2 IPC works)" {
+  # Pre-hardening the ctl reader tested an always-empty \$child, so respawn
+  # was a no-op. With the child pid file-backed it can signal it. fake-claude
+  # 'remote-control' blocks (long-lived) so child #1 stays up until respawn.
+  run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  pstate="${BATS_TMPDIR}/cc-session/$SESSION_NAME.pstate"
+  for _ in $(seq 1 20); do
+    pid1="$(sed -n 's/^child=//p' "$pstate" 2>/dev/null || true)"
+    [ -n "$pid1" ] && [ "$pid1" != none ] && break
+    sleep 0.5
+  done
+  assert_eq "$([ -n "$pid1" ] && [ "$pid1" != none ] && echo ok)" "ok"
+
+  run "$CC_SESSION" --ctl "$SESSION_NAME" respawn
+  assert_eq "$status" 0
+
+  pid2="$pid1"
+  for _ in $(seq 1 20); do
+    pid2="$(sed -n 's/^child=//p' "$pstate" 2>/dev/null || true)"
+    [ -n "$pid2" ] && [ "$pid2" != none ] && [ "$pid2" != "$pid1" ] && break
+    sleep 0.5
+  done
+  # A new child pid proves the old one was actually killed + respawned.
+  [ -n "$pid2" ] && [ "$pid2" != none ] && [ "$pid2" != "$pid1" ]
 }
 
 @test "remain-on-exit is set as a window option on newly created sessions" {

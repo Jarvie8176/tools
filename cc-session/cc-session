@@ -5,7 +5,7 @@
 set -euo pipefail
 
 PROG="${0##*/}"
-VERSION="0.7.1"
+VERSION="0.7.2"
 
 # Absolute, symlink-resolved path to this script. Captured at top-level
 # so --update can locate the enclosing git checkout.
@@ -34,9 +34,14 @@ DESCRIPTION
 
     Default launch runs \`claude remote-control\` inside a supervisor
     loop that auto-respawns on crash with exponential backoff
-    (5→10→20→40→60s) and a circuit breaker (5 consecutive failures
-    → stop). Before each respawn the supervisor probes
-    \`claude auth status\`. The server prints its claude.ai/code URL
+    (5→10→20→40→60s) and a NON-terminal circuit breaker: after 5
+    consecutive sub-threshold failures it enters long-backoff and
+    keeps retrying (it never self-exits on failure — a clean exit on
+    failure once stranded the backbone after a cold-boot transient,
+    homelab-ops#1222). The watchdog's health signal is real RC
+    connectivity (the pane's "Connected" state), not the local-only
+    \`claude auth status\` (which can read OK while RC is 401'ing).
+    The server prints its claude.ai/code URL
     on startup; $PROG captures it from the pane and surfaces it via
     the tmux status bar + a state file (see "Post-launch URL
     capture" below). Supervisor log lines are prefixed [cc-sv].
@@ -204,9 +209,12 @@ OPTIONS
                       monitoring loops.
     --metrics [NAME]  Output prometheus text exposition format for one
                       or all managed sessions. Includes: cc_session_up,
-                      cc_session_auth_healthy, cc_session_uptime_seconds,
+                      cc_session_auth_healthy, cc_session_rc_connected,
+                      cc_session_circuit_open, cc_session_uptime_seconds,
                       cc_session_respawn_total, cc_session_last_error_epoch,
                       cc_session_workers, cc_session_capacity.
+                      Alert on cc_session_rc_connected==0 (real outage);
+                      cc_session_circuit_open==1 (degraded, retrying).
                       Safe to scrape from a prometheus exporter.
     --ctl NAME CMD [ARGS...]
                       Send a command to a running supervisor via its
@@ -305,8 +313,9 @@ ENVIRONMENT
                                     minutes. Default: 0 (disabled — a
                                     long quiet task is never reaped).
     CC_SESSION_SV_MAX_FAILS         Server-mode supervisor: consecutive
-                                    failures before circuit breaker trips.
-                                    Default: 5.
+                                    failures before the circuit opens
+                                    (non-terminal — switches to long
+                                    backoff, keeps retrying). Default: 5.
     CC_SESSION_SV_BACKOFF_BASE      Supervisor backoff base interval in
                                     seconds. Default: 5.
     CC_SESSION_SV_BACKOFF_MAX       Supervisor backoff ceiling in seconds.
@@ -316,8 +325,14 @@ ENVIRONMENT
                                     failure counter + backoff). Default: 60.
     CC_SESSION_SV_WATCHDOG_INTERVAL Health watchdog probe interval in
                                     seconds. The supervisor periodically
-                                    probes auth and scrapes capacity.
+                                    probes real RC connectivity (pane
+                                    "Connected") and scrapes capacity.
                                     Default: 60.
+    CC_SESSION_PROMPT_IDLE_TIMEOUT  Max seconds to wait for the TUI to
+                                    reach a stable idle prompt before
+                                    sending /remote-control on
+                                    teleport/resume (large transcripts
+                                    load slowly). Default: 120.
 
 POST-LAUNCH URL CAPTURE
 
@@ -599,15 +614,21 @@ write_state_file() {
   mv -f "$tmp" "$target" 2>/dev/null || { rm -f "$tmp" 2>/dev/null; return 1; }
 }
 
-# Remove all state files (.url, .health, .prom, .ctl) for a session.
+# Remove all state files (.url, .health, .prom, .ctl, .pstate, .wstate)
+# for a session.
 remove_state_all() {
   local sess="$1"
   remove_state_url "$sess"
-  rm -f "$(health_file_for "$sess")" 2>/dev/null || true
+  local hf
+  hf="$(health_file_for "$sess")"
+  rm -f "$hf" 2>/dev/null || true
   rm -f "$(prom_file_for "$sess")" 2>/dev/null || true
+  # Supervisor file-backed state (N1): <base>.pstate / <base>.wstate.
+  rm -f "${hf%.health}.pstate" "${hf%.health}.wstate" 2>/dev/null || true
   local ctl
   ctl="$(ctl_pipe_for "$sess")"
   [[ -p "$ctl" ]] && rm -f "$ctl" 2>/dev/null || true
+  rm -f "$ctl.stop" 2>/dev/null || true
 }
 
 # --- @cc-session-mode state machine helpers (levers ①⑤⑥⑦) -------------------
@@ -776,7 +797,7 @@ print_status_all() {
 print_metrics_one() {
   local sess="$1"
   local prom_file up=0 auth_healthy=0 uptime=0 respawn_total=0 last_error_epoch=0
-  local workers=0 capacity=0
+  local workers=0 capacity=0 rc_connected=0 circuit_open=0
 
   if sess_exists "$sess"; then
     local live_count=0 _pd
@@ -802,6 +823,8 @@ print_metrics_one() {
         last_error_epoch) last_error_epoch="$_val" ;;
         workers)         workers="$_val" ;;
         capacity)        capacity="$_val" ;;
+        rc_connected)    rc_connected="$_val" ;;
+        circuit_open)    circuit_open="$_val" ;;
       esac
     done < "$prom_file"
   fi
@@ -810,9 +833,15 @@ print_metrics_one() {
   printf '# HELP cc_session_up Whether the session pane process is alive.\n'
   printf '# TYPE cc_session_up gauge\n'
   printf 'cc_session_up{%s} %s\n' "$labels" "$up"
-  printf '# HELP cc_session_auth_healthy Whether the last auth probe succeeded.\n'
+  printf '# HELP cc_session_auth_healthy Whether the last claude-auth-status probe succeeded (LOCAL cred state only; not RC connectivity).\n'
   printf '# TYPE cc_session_auth_healthy gauge\n'
   printf 'cc_session_auth_healthy{%s} %s\n' "$labels" "$auth_healthy"
+  printf '# HELP cc_session_rc_connected Whether the RC server pane shows a live Connected state (the real teleport-readiness signal).\n'
+  printf '# TYPE cc_session_rc_connected gauge\n'
+  printf 'cc_session_rc_connected{%s} %s\n' "$labels" "$rc_connected"
+  printf '# HELP cc_session_circuit_open 1 while the supervisor is in long-backoff after repeated failures (degraded but still retrying).\n'
+  printf '# TYPE cc_session_circuit_open gauge\n'
+  printf 'cc_session_circuit_open{%s} %s\n' "$labels" "$circuit_open"
   printf '# HELP cc_session_uptime_seconds Seconds since the tmux session was created.\n'
   printf '# TYPE cc_session_uptime_seconds gauge\n'
   printf 'cc_session_uptime_seconds{%s} %s\n' "$labels" "$uptime"
@@ -916,6 +945,32 @@ get_active_rc_url() {
 # and polls the pane for up to CC_SESSION_RC_ENABLE_TIMEOUT seconds
 # (default 10) waiting for the URL to appear. Echoes the URL on stdout.
 # Returns 1 if no URL surfaces in time.
+# Wait until a tmux pane's content stops changing — i.e. claude finished
+# loading/rendering and is sitting at an idle prompt — before we inject
+# keystrokes. A large --resume/--teleport transcript can take MINUTES to
+# load (a 6.4MB transcript took ~5min, homelab-ops#1222); sending
+# "/remote-control" into a still-loading TUI lands the slash in the
+# autocomplete menu instead of executing it. Stability-based (content
+# unchanged across samples) so it's locale-independent (no reliance on
+# matching the unicode prompt glyph). Best-effort: 0 if idle detected,
+# 1 on timeout (caller proceeds anyway).
+wait_for_idle_prompt() {
+  local sess="$1" max="${2:-120}" prev="__cc_init__" cur stable=0 _i iters
+  iters=$(( max * 2 ))  # 0.5s interval
+  for (( _i=0; _i<iters; _i++ )); do
+    sleep 0.5
+    cur="$(tmux capture-pane -t "$sess" -p 2>/dev/null || true)"
+    if [[ -n "$cur" && "$cur" == "$prev" ]]; then
+      stable=$(( stable + 1 ))
+      (( stable >= 3 )) && return 0   # ~1.5s unchanged → loaded + idle
+    else
+      stable=0
+    fi
+    prev="$cur"
+  done
+  return 1
+}
+
 enable_remote_control() {
   local sess="$1" url _i timeout iters
   url="$(get_active_rc_url "$sess")"
@@ -923,6 +978,10 @@ enable_remote_control() {
     printf '%s\n' "$url"
     return 0
   fi
+  # Don't send into a still-loading TUI (homelab-ops#1222): wait for the
+  # pane to reach a stable idle prompt first. Scales with the transcript
+  # size implicitly (waits until rendering settles), capped by timeout.
+  wait_for_idle_prompt "$sess" "${CC_SESSION_PROMPT_IDLE_TIMEOUT:-120}" || true
   tmux send-keys -t "$sess" "/remote-control" Enter 2>/dev/null || return 1
   timeout="${CC_SESSION_RC_ENABLE_TIMEOUT:-10}"
   iters=$(( timeout * 2 ))  # 0.5s polling interval
@@ -1302,6 +1361,20 @@ EOF
   fi
 fi
 
+# --- resolve CLAUDE_BIN early (needed for default session naming, below) ----
+# MUST precede the default-SESSION_NAME block: that block dereferences
+# $CLAUDE_BIN for `--version`, and under `set -u` an unset CLAUDE_BIN (the
+# normal case — unit templates leave it unset) would abort with
+# "CLAUDE_BIN: unbound variable" on every name-auto-deriving invocation.
+CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
+if [[ ! -x "$CLAUDE_BIN" ]]; then
+  CLAUDE_BIN="$(command -v claude || true)"
+fi
+if [[ -z "${CLAUDE_BIN:-}" ]]; then
+  echo "$PROG: claude binary not found (set CLAUDE_BIN or install claude)" >&2
+  exit 1
+fi
+
 PROJECT_DIR="${1:-$HOME/cc}"
 if [[ -n "${2:-}" ]]; then
   SESSION_NAME="$2"
@@ -1321,16 +1394,6 @@ fi
 
 if ! command -v tmux >/dev/null 2>&1; then
   echo "$PROG: tmux not installed (try: brew install tmux)" >&2
-  exit 1
-fi
-
-# --- resolve CLAUDE_BIN early (needed for default session naming) -----------
-CLAUDE_BIN="${CLAUDE_BIN:-$HOME/.local/bin/claude}"
-if [[ ! -x "$CLAUDE_BIN" ]]; then
-  CLAUDE_BIN="$(command -v claude || true)"
-fi
-if [[ -z "${CLAUDE_BIN:-}" ]]; then
-  echo "$PROG: claude binary not found (set CLAUDE_BIN or install claude)" >&2
   exit 1
 fi
 
@@ -1670,10 +1733,14 @@ fi
 
 # --- Supervisor wrapper (server-mode only) -----------------------------------
 # Teleport is single-use — no respawn. Server-mode wraps claude in a
-# supervisor loop with circuit breaker, exponential backoff, pre-respawn
-# auth probe, periodic health watchdog (C7), IPC pipe (C5), and prom
-# state writer (C6). The supervisor runs inside the tmux pane; its log
-# lines are prefixed [cc-sv] so they're distinguishable from claude output.
+# supervisor loop with a NON-terminal circuit breaker (long-backoff, never
+# self-exits on failure), exponential backoff, an RC-connectivity watchdog
+# (C7), an IPC pipe (C5), and prom/health state (C6). Shared supervisor
+# state (child pid + counters) is FILE-BACKED across the parent loop and
+# its watchdog/ctl subshells (N1) — plain vars would be copied by value at
+# fork, which broke IPC respawn/stop and the pid/counter metrics. The
+# supervisor runs inside the tmux pane; its log lines are prefixed [cc-sv]
+# so they're distinguishable from claude output.
 CC_SV_MAX_FAILS="${CC_SESSION_SV_MAX_FAILS:-5}"
 CC_SV_BACKOFF_BASE="${CC_SESSION_SV_BACKOFF_BASE:-5}"
 CC_SV_BACKOFF_MAX="${CC_SESSION_SV_BACKOFF_MAX:-60}"
@@ -1693,40 +1760,95 @@ if [[ "$CC_MODE" == server ]]; then
   _SV_SESSION_ID_TARGET="$SESSION_NAME"
 
   _SV_SCRIPT='
-    fails=0; delay='"$CC_SV_BACKOFF_BASE"'
-    respawn_total=0; auth_healthy=1; last_error_epoch=0
+    # --- build-time config (spliced from cc-session at construction) ---
+    backoff_base='"$CC_SV_BACKOFF_BASE"'
+    backoff_max='"$CC_SV_BACKOFF_MAX"'
+    healthy_threshold='"$CC_SV_HEALTHY_THRESHOLD"'
+    max_fails='"$CC_SV_MAX_FAILS"'
+    watchdog_interval='"$CC_SV_WATCHDOG_INTERVAL"'
     health_file='"$(printf '%q' "$_SV_HEALTH_FILE")"'
     prom_file='"$(printf '%q' "$_SV_PROM_FILE")"'
     ctl_pipe='"$(printf '%q' "$_SV_CTL_PIPE")"'
     state_dir='"$(printf '%q' "$_SV_STATE_DIR")"'
     claude_bin='"$_SV_CLAUDE_BIN"'
     sv_target='"$(printf '%q' "$_SV_SESSION_ID_TARGET")"'
-    watchdog_interval='"$CC_SV_WATCHDOG_INTERVAL"'
-    watchdog_pid=""
-    ctl_pid=""
-    child=""
 
-    # Write prom state file (atomic via tmp+mv).
-    write_prom() {
-      local workers="${1:-0}" capacity="${2:-0}"
-      mkdir -p "$state_dir" 2>/dev/null || return
-      local tmp="$prom_file.tmp.$$"
-      printf "auth_healthy=%s\nrespawn_total=%s\nlast_error_epoch=%s\nworkers=%s\ncapacity=%s\n" \
-        "$auth_healthy" "$respawn_total" "$last_error_epoch" "$workers" "$capacity" \
-        > "$tmp" 2>/dev/null && mv -f "$tmp" "$prom_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    # --- runtime state ---
+    fails=0; delay=$backoff_base
+    respawn_total=0; last_error_epoch=0; circuit_open=0
+    auth_healthy=1; rc_connected=0
+    watchdog_pid=""; ctl_pid=""; child=""
+    mkdir -p "$state_dir" 2>/dev/null || true
+
+    # --- file-backed shared state (N1) -------------------------------------
+    # The parent loop, the watchdog (&) and the ctl reader (&) are SEPARATE
+    # processes. Plain shell vars are copied BY VALUE at fork, so the
+    # subshells never see the parent and the watchdog would clobber the
+    # parent counters. Split ownership across two single-writer files and
+    # have every publisher READ from disk:
+    #   <base>.pstate  (parent-owned)  : child, respawn_total,
+    #                                     last_error_epoch, circuit_open
+    #   <base>.wstate  (watchdog-owned): rc_connected, auth_healthy,
+    #                                     workers, capacity
+    base="${health_file%.health}"
+    pstate_file="$base.pstate"
+    wstate_file="$base.wstate"
+
+    _atomic() {  # $1=dest; content on stdin
+      local f="$1" tmp="$1.tmp.$$"
+      if cat > "$tmp" 2>/dev/null; then
+        mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+      else
+        rm -f "$tmp" 2>/dev/null
+      fi
+    }
+    _get() {  # $1=file $2=key $3=default
+      local v
+      v="$(sed -n "s/^$2=//p" "$1" 2>/dev/null | tail -1)"
+      [[ -n "$v" ]] && printf "%s" "$v" || printf "%s" "$3"
+    }
+    write_pstate() {
+      printf "child=%s\nrespawn_total=%s\nlast_error_epoch=%s\ncircuit_open=%s\n" \
+        "${child:-none}" "$respawn_total" "$last_error_epoch" "$circuit_open" \
+        | _atomic "$pstate_file"
+    }
+    write_wstate() {  # $1=workers $2=capacity
+      printf "rc_connected=%s\nauth_healthy=%s\nworkers=%s\ncapacity=%s\n" \
+        "$rc_connected" "$auth_healthy" "${1:-0}" "${2:-0}" \
+        | _atomic "$wstate_file"
     }
 
-    # Write health file (human-readable snapshot).
-    write_health() {
-      mkdir -p "$state_dir" 2>/dev/null || return
-      local tmp="$health_file.tmp.$$"
-      printf "status: %s\nauth: %s\nrespawns: %s\nlast_error: %s\nwatchdog_interval: %ss\npid: %s\n" \
-        "$1" "$( (( auth_healthy )) && echo ok || echo failed )" \
-        "$respawn_total" "$last_error_epoch" "$watchdog_interval" "${child:-none}" \
-        > "$tmp" 2>/dev/null && mv -f "$tmp" "$health_file" 2>/dev/null || rm -f "$tmp" 2>/dev/null
+    # Merge both state files into the public prom + health outputs. Safe to
+    # call from ANY process — reads disk, never in-memory vars. Keeps all
+    # legacy prom keys (parser compat) and adds rc_connected + circuit_open.
+    publish() {  # $1 = human status word
+      local status="${1:-running}" pc pr ple pco wrc wau ww wc
+      pc="$(_get "$pstate_file" child none)"
+      pr="$(_get "$pstate_file" respawn_total 0)"
+      ple="$(_get "$pstate_file" last_error_epoch 0)"
+      pco="$(_get "$pstate_file" circuit_open 0)"
+      wrc="$(_get "$wstate_file" rc_connected 0)"
+      wau="$(_get "$wstate_file" auth_healthy 1)"
+      ww="$(_get "$wstate_file" workers 0)"
+      wc="$(_get "$wstate_file" capacity 0)"
+      printf "auth_healthy=%s\nrc_connected=%s\nrespawn_total=%s\nlast_error_epoch=%s\ncircuit_open=%s\nworkers=%s\ncapacity=%s\n" \
+        "$wau" "$wrc" "$pr" "$ple" "$pco" "$ww" "$wc" | _atomic "$prom_file"
+      printf "status: %s\nrc: %s\nauth: %s\nrespawns: %s\nlast_error: %s\ncircuit_open: %s\nwatchdog_interval: %ss\npid: %s\n" \
+        "$status" "$( (( wrc )) && echo connected || echo disconnected )" \
+        "$( (( wau )) && echo ok || echo failed )" \
+        "$pr" "$ple" "$pco" "$watchdog_interval" "$pc" | _atomic "$health_file"
     }
 
-    # Scrape workers/capacity from tmux pane (best-effort).
+    # Real RC-connectivity probe (#3): the server prints "Connected" in this
+    # pane on success. Require the live child alive AND a recent (last few
+    # lines) Connected — guards against a stale scrollback line after exit.
+    rc_probe() {
+      local pid
+      pid="$(_get "$pstate_file" child none)"
+      { [[ "$pid" == none || -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; } && return 1
+      tmux capture-pane -t "$sv_target" -p -S -8 2>/dev/null | grep -q "Connected"
+    }
+
     scrape_capacity() {
       local cap_line
       cap_line="$(tmux capture-pane -t "$sv_target" -p -S -20 2>/dev/null \
@@ -1738,27 +1860,27 @@ if [[ "$CC_MODE" == server ]]; then
       fi
     }
 
-    # C7: health watchdog — periodic auth probe + capacity scrape.
+    # Watchdog: periodic REAL rc-probe (#3) + capacity scrape. Owns wstate;
+    # never writes pstate (single-writer invariant).
     start_watchdog() {
       (
         while true; do
           sleep "$watchdog_interval"
-          if "$claude_bin" auth status >/dev/null 2>&1; then
-            auth_healthy=1
-          else
-            auth_healthy=0
-            last_error_epoch=$(date +%s)
-            echo "[cc-sv] watchdog: auth probe FAILED"
+          if rc_probe; then rc_connected=1; else
+            rc_connected=0; echo "[cc-sv] watchdog: RC not connected"
           fi
+          # secondary, non-authoritative local cred hint
+          if "$claude_bin" auth status >/dev/null 2>&1; then auth_healthy=1; else auth_healthy=0; fi
           read -r w c <<< "$(scrape_capacity)"
-          write_prom "$w" "$c"
-          write_health running
+          write_wstate "$w" "$c"
+          publish running
         done
       ) &
       watchdog_pid=$!
     }
 
-    # C5: IPC pipe reader — process commands from --ctl.
+    # IPC reader: reads the live child pid from pstate (N1/N2 — respawn/stop
+    # can now actually signal claude, instead of testing an empty $child).
     start_ctl_reader() {
       mkdir -p "$state_dir" 2>/dev/null || return
       rm -f "$ctl_pipe" 2>/dev/null
@@ -1767,14 +1889,15 @@ if [[ "$CC_MODE" == server ]]; then
         while true; do
           if [[ -p "$ctl_pipe" ]]; then
             while IFS= read -r cmd; do
+              c="$(_get "$pstate_file" child none)"
               case "$cmd" in
                 respawn)
                   echo "[cc-sv] IPC: respawn requested"
-                  [[ -n "$child" ]] && kill "$child" 2>/dev/null || true ;;
+                  [[ "$c" != none && -n "$c" ]] && kill "$c" 2>/dev/null || true ;;
                 stop)
                   echo "[cc-sv] IPC: stop requested"
-                  [[ -n "$child" ]] && kill "$child" 2>/dev/null || true
-                  touch "$ctl_pipe.stop" 2>/dev/null || true ;;
+                  touch "$ctl_pipe.stop" 2>/dev/null || true
+                  [[ "$c" != none && -n "$c" ]] && kill "$c" 2>/dev/null || true ;;
                 *)
                   echo "[cc-sv] IPC: unknown command: $cmd" ;;
               esac
@@ -1792,15 +1915,25 @@ if [[ "$CC_MODE" == server ]]; then
       [[ -n "$ctl_pid" ]] && kill "$ctl_pid" 2>/dev/null || true
       rm -f "$ctl_pipe" "$ctl_pipe.stop" 2>/dev/null || true
     }
+    # N4: on SIGTERM/INT (systemctl stop / Restart) reap the live claude
+    # child too — not just the helper subshells — so it is never orphaned.
+    on_term() {
+      local c
+      c="$(_get "$pstate_file" child none)"
+      [[ "$c" != none && -n "$c" ]] && kill "$c" 2>/dev/null || true
+      cleanup
+      exit 143
+    }
+    trap on_term TERM INT
     trap cleanup EXIT
 
+    write_pstate
+    write_wstate 0 0
     start_watchdog
     start_ctl_reader
-    write_health starting
-    write_prom 0 0
+    publish starting
 
     while true; do
-      # Check IPC stop flag.
       if [[ -f "$ctl_pipe.stop" ]]; then
         echo "[cc-sv] stop flag set — exiting"
         rm -f "$ctl_pipe.stop" 2>/dev/null
@@ -1810,48 +1943,62 @@ if [[ "$CC_MODE" == server ]]; then
       start_ts=$(date +%s)
       '"$_SV_INNER"' &
       child=$!
-      write_health running
+      write_pstate
+      rc_connected=1   # optimistic; the watchdog corrects within one interval
       read -r w c <<< "$(scrape_capacity)"
-      write_prom "$w" "$c"
+      write_wstate "$w" "$c"
+      publish running
       wait "$child" 2>/dev/null
       rc=$?
-      child=""
+      child=""; rc_connected=0
+      write_pstate
+      write_wstate 0 0
       elapsed=$(( $(date +%s) - start_ts ))
       echo "[cc-sv] claude exited rc=$rc after ${elapsed}s"
-      # Check IPC stop flag after wait.
       if [[ -f "$ctl_pipe.stop" ]]; then
         echo "[cc-sv] stop flag set — exiting"
         rm -f "$ctl_pipe.stop" 2>/dev/null
         break
       fi
-      if (( elapsed >= '"$CC_SV_HEALTHY_THRESHOLD"' )); then
-        fails=0; delay='"$CC_SV_BACKOFF_BASE"'
-        echo "[cc-sv] ran >'"$CC_SV_HEALTHY_THRESHOLD"'s — resetting circuit breaker"
+      if (( elapsed >= healthy_threshold )); then
+        fails=0; delay=$backoff_base
+        (( circuit_open )) && echo "[cc-sv] recovered — closing circuit"
+        circuit_open=0
+        echo "[cc-sv] ran >${healthy_threshold}s — resetting backoff"
       else
         fails=$((fails + 1))
         last_error_epoch=$(date +%s)
       fi
-      if (( fails >= '"$CC_SV_MAX_FAILS"' )); then
-        echo "[cc-sv] CIRCUIT BREAKER: $fails consecutive failures — stopping"
-        break
-      fi
       respawn_total=$((respawn_total + 1))
-      echo "[cc-sv] pre-respawn auth probe..."
-      if ! "$claude_bin" auth status >/dev/null 2>&1; then
-        auth_healthy=0
-        last_error_epoch=$(date +%s)
-        echo "[cc-sv] auth probe FAILED — waiting ${delay}s before retry"
-      else
-        auth_healthy=1
-        echo "[cc-sv] auth probe OK"
+      # #2: NON-terminal circuit breaker. A clean rc=0 exit on FAILURE is
+      # exactly what stranded the backbone on cold boot (homelab-ops#1222):
+      # Restart=on-failure cannot see a clean exit. So after max_fails
+      # consecutive sub-threshold failures we do NOT exit — we raise
+      # circuit_open, pin the delay at backoff_max, and KEEP retrying. The
+      # only clean exit is an intentional stop (the .stop flag above).
+      if (( fails >= max_fails )); then
+        (( ! circuit_open )) && \
+          echo "[cc-sv] CIRCUIT OPEN: $fails consecutive failures — long-backoff retry every ${backoff_max}s (not stopping)"
+        circuit_open=1
+        delay=$backoff_max
       fi
-      write_health respawning
-      write_prom 0 0
+      write_pstate
+      echo "[cc-sv] pre-respawn cred hint..."
+      if "$claude_bin" auth status >/dev/null 2>&1; then
+        auth_healthy=1; echo "[cc-sv] auth status OK (local check only)"
+      else
+        auth_healthy=0; echo "[cc-sv] auth status FAILED (local check only)"
+      fi
+      write_wstate 0 0
+      publish respawning
       echo "[cc-sv] backoff ${delay}s..."
       sleep "$delay"
-      delay=$(( delay * 2 ))
-      (( delay > '"$CC_SV_BACKOFF_MAX"' )) && delay='"$CC_SV_BACKOFF_MAX"'
+      if (( ! circuit_open )); then
+        delay=$(( delay * 2 ))
+        (( delay > backoff_max )) && delay=$backoff_max
+      fi
     done
+    publish stopped
     echo "[cc-sv] supervisor stopped"
   '
   LAUNCH_CMD=(bash -lc "$_SV_SCRIPT")
@@ -1964,7 +2111,9 @@ fi
         "$PROG: WARN — resume prompt not seen in ${resume_timeout}s; bump CC_SESSION_RESUME_TIMEOUT" \
         2>/dev/null || true
     fi
-    sleep 2  # give resume choice a moment to settle into idle prompt
+    # Readiness is now polled inside enable_remote_control
+    # (wait_for_idle_prompt) — no fixed sleep, which was too short for
+    # large transcripts (homelab-ops#1222).
     url="$(enable_remote_control "$_T")" || url=""
   elif [[ -n "$RESUME_UUID" ]]; then
     # Local resume: claude --resume loads on-disk transcript directly.
@@ -1972,7 +2121,8 @@ fi
     # cloud-side question), but we still need /remote-control to
     # surface a fresh RC URL since claude --resume has no native RC
     # registration.
-    sleep 2  # give claude time to open the JSONL and reach idle
+    # Readiness polled inside enable_remote_control (large JSONL can take
+    # minutes to load; fixed sleep was too short — homelab-ops#1222).
     url="$(enable_remote_control "$_T")" || url=""
   else
     # Server-mode launch: poll for the URL the server prints on startup.
@@ -2100,4 +2250,13 @@ if (( DETACH )); then
   exit 0
 fi
 
+# N3: `tmux attach` refuses to nest inside an existing tmux client
+# ("sessions should be nested with care, unset $TMUX"). The detach/
+# new-session work already happened above; from inside tmux, switch the
+# current client to the new session instead of erroring out.
+if [[ -n "${TMUX:-}" ]]; then
+  echo "$PROG: inside tmux — switching client to '$SESSION_NAME'" \
+       "(detach with the prefix key, or run with -d next time)" >&2
+  exec tmux switch-client -t "$SESSION_NAME"
+fi
 exec tmux attach -t "$SESSION_NAME"

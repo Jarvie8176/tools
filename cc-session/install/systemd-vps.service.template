@@ -10,12 +10,20 @@
 #   then exits. systemd needs Type=forking to track the spawned tmux
 #   session as the service.
 #
-# WHY Restart=on-failure
-#   On VPS infrastructure (well-managed, stable network) the failure
-#   modes are bounded — primarily Anthropic API outages > 10min, where
-#   restart is the right move. Unlike the macOS LaunchAgent (which uses
-#   KeepAlive=false because user attention is the recovery loop),
-#   here we want auto-recovery because no human is watching.
+# WHY Restart=on-failure (NOT Restart=always)
+#   The supervisor's circuit breaker is non-terminal (it enters a long
+#   backoff and keeps retrying; it never exits cleanly on RC failures).
+#   So the ONLY clean (rc=0) supervisor exit is an intentional stop
+#   (`cc-session --ctl stop` / the .stop flag). Restart=on-failure
+#   therefore has exactly the right semantics: respawn on a crash /
+#   signal / non-zero exit, but honor an intentional stop. Restart=always
+#   would fight `--ctl stop` (respawning a deliberately-stopped backbone).
+#
+#   This corrects the pre-hardening trap (homelab-ops#1222): the OLD
+#   circuit breaker `break`ed → supervisor exited rc=0 on *failure* →
+#   on-failure never fired → a cold-boot transient latched the backbone
+#   off permanently. With the breaker now non-terminal that clean-exit-
+#   on-failure path is gone, so on-failure is sound again.
 #
 #   RestartSec=30 prevents storm-of-restarts during transient outages.
 #
