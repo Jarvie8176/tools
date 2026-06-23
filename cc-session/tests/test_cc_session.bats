@@ -1476,21 +1476,23 @@ mk_repo() {
   export CC_SESSION_REAP_POLL=1
   export CC_SESSION_REAP_GRACE=1
   CC_FAKE_CLAUDE_CRASH=1 CC_SESSION_RC_URL_TIMEOUT=2 \
-    CC_SESSION_SV_MAX_FAILS=1 CC_SESSION_SV_BACKOFF_BASE=1 \
+    CC_SESSION_SV_MAX_FAILS=1 CC_SESSION_SV_BACKOFF_BASE=1 CC_SESSION_SV_BACKOFF_MAX=1 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
   assert_eq "$(mode_value "$SESSION_NAME")" "server"
 
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    pd="$(tmux list-panes -s -t "$SESSION_NAME" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
-    [ "$pd" = "1" ] && break
-    sleep 0.3
-  done
-  assert_eq "$pd" "1"
-  sleep 5   # well past poll+grace; a teleport session would be gone
+  # With the non-terminal circuit breaker the supervisor stays alive (crash-
+  # looping under long backoff) — the pane never dies. Wait until it's
+  # clearly running past startup.
+  wait_for_pane "$SESSION_NAME" "CIRCUIT OPEN" 15 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
+  sleep 5   # well past poll+grace; a teleport session would be reaped by now
 
-  # Scope guard: server-mode dead pane must persist for debuggability.
+  # Scope guard: the server-mode session must persist (never reaped) and the
+  # supervisor must still be alive.
   tmux has-session -t "$SESSION_NAME"
+  pd="$(tmux list-panes -s -t "$SESSION_NAME" -F '#{pane_dead}' 2>/dev/null | head -1 || true)"
+  assert_eq "$pd" "0"
 }
 
 # ====================================================================
@@ -1594,35 +1596,43 @@ mk_repo() {
   refute_contains "$buf" "[cc-sv]"
 }
 
-@test "C2: circuit breaker stops after SV_MAX_FAILS consecutive crashes" {
+@test "C2: circuit breaker is non-terminal — opens and keeps retrying" {
+  # Pre-hardening the breaker `break`ed (clean rc=0 exit on failure → the
+  # backbone stayed down after a cold-boot transient, homelab-ops#1222). It
+  # is now non-terminal: after SV_MAX_FAILS it opens, pins the long backoff,
+  # and keeps respawning. The only clean exit is an intentional stop.
   CC_FAKE_CLAUDE_CRASH=1 \
     CC_SESSION_SV_MAX_FAILS=2 \
     CC_SESSION_SV_BACKOFF_BASE=1 \
+    CC_SESSION_SV_BACKOFF_MAX=1 \
     CC_SESSION_RC_URL_TIMEOUT=2 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
-  # Wait for circuit breaker message (2 crashes × ~0.5s each + 1s backoff)
-  wait_for_pane "$SESSION_NAME" "CIRCUIT BREAKER" 15 \
+  wait_for_pane "$SESSION_NAME" "CIRCUIT OPEN" 15 \
     || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
   buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
-  assert_contains "$buf" "CIRCUIT BREAKER: 2 consecutive failures"
-  assert_contains "$buf" "supervisor stopped"
+  assert_contains "$buf" "CIRCUIT OPEN: 2 consecutive failures"
+  # Must NOT stop on failures.
+  refute_contains "$buf" "supervisor stopped"
+  # And it keeps trying after the circuit opens.
+  wait_for_pane "$SESSION_NAME" "starting claude (attempt 3" 15 \
+    || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
 }
 
-@test "C2: pre-respawn auth probe runs before backoff" {
-  # Use a stub that crashes once, then the supervisor probes auth and
-  # respawns. We just need to see the auth probe message.
+@test "C2: pre-respawn cred hint runs before backoff" {
+  # Use a stub that crashes once, then the supervisor logs its (secondary,
+  # local-only) cred hint and respawns. We just need to see the message.
   CC_FAKE_CLAUDE_CRASH=1 \
     CC_SESSION_SV_MAX_FAILS=3 \
     CC_SESSION_SV_BACKOFF_BASE=1 \
     CC_SESSION_RC_URL_TIMEOUT=2 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
-  wait_for_pane "$SESSION_NAME" "auth probe" 15 \
+  wait_for_pane "$SESSION_NAME" "pre-respawn cred hint" 15 \
     || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
   buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
-  assert_contains "$buf" "[cc-sv] pre-respawn auth probe..."
-  assert_contains "$buf" "[cc-sv] auth probe OK"
+  assert_contains "$buf" "[cc-sv] pre-respawn cred hint..."
+  assert_contains "$buf" "[cc-sv] auth status OK (local check only)"
 }
 
 @test "C2: auth probe failure is logged" {
@@ -1633,10 +1643,10 @@ mk_repo() {
     CC_SESSION_RC_URL_TIMEOUT=2 \
     run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
   assert_eq "$status" 0
-  wait_for_pane "$SESSION_NAME" "auth probe FAILED" 15 \
+  wait_for_pane "$SESSION_NAME" "auth status FAILED" 15 \
     || { tmux capture-pane -t "$SESSION_NAME" -p; return 1; }
   buf="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
-  assert_contains "$buf" "[cc-sv] auth probe FAILED"
+  assert_contains "$buf" "[cc-sv] auth status FAILED"
 }
 
 @test "C2: SV_BACKOFF_MAX caps the delay" {
