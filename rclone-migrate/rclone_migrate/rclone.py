@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Tuple
 
@@ -39,18 +40,30 @@ def _run(args: List[str], check: bool = True, capture: bool = True) -> subproces
         # Print as a single shell-quoted line so user can copy-paste
         import shlex
         _VERBOSE_HOOK.detail("    $ " + " ".join(shlex.quote(a) for a in full))
-    cp = subprocess.run(full, capture_output=capture, text=True)
+    # stderr is ALWAYS captured — even when stdout streams live (capture=False)
+    # for a long copy/delete — so rclone's ERROR/WARNING diagnostics survive in
+    # the audit trail instead of escaping to the inherited terminal fd and
+    # vanishing on failure (#52). stdout is captured only when the caller asks.
+    cp = subprocess.run(
+        full,
+        stdout=subprocess.PIPE if capture else None,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
     if check and cp.returncode != 0:
         raise RcloneError(
             f"rclone {args[0] if args else ''} failed (exit {cp.returncode}):\n{cp.stderr}"
         )
-    # At -v, always surface stderr even on success (rclone often emits warnings)
-    if (
-        _VERBOSE_HOOK is not None and _VERBOSE_HOOK.is_detail()
-        and capture and cp.stderr.strip()
-    ):
-        for line in cp.stderr.splitlines():
-            _VERBOSE_HOOK.detail(f"    | {line}")
+    # Surface captured stderr (rclone often emits warnings even on success).
+    if cp.stderr and cp.stderr.strip():
+        if _VERBOSE_HOOK is not None and _VERBOSE_HOOK.is_detail():
+            for line in cp.stderr.splitlines():
+                _VERBOSE_HOOK.detail(f"    | {line}")
+        elif not capture:
+            # stdout streamed live but stderr was withheld from the terminal;
+            # echo it through sys.stderr so the user still sees it AND
+            # audit.run()'s _Tee records it in the run log (#52).
+            sys.stderr.write(cp.stderr)
     return cp
 
 
