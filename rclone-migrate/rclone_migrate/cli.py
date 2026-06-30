@@ -135,6 +135,13 @@ def cmd_hash(argv: Optional[List[str]] = None) -> int:
         )
         algo = negotiate_algo(job, cfg)
         ev.set_algo(algo)
+        # multi_hash (#10): record the profile's secondary algorithms alongside
+        # the primary. resolve_profile() is None when a hash_priority/hash
+        # override decides (no profile) → no extras.
+        prof = cfg.resolve_profile(job)
+        extra_algos = [a for a in (prof.multi_hash if prof else []) if a != algo]
+        if extra_algos and progress:
+            print(f"multi_hash: also recording {extra_algos} alongside {algo}")
         total = 0
         manifests: dict = {}
 
@@ -148,6 +155,7 @@ def cmd_hash(argv: Optional[List[str]] = None) -> int:
                 full=args.full,
                 local_cache_in_root=job.resolved_local_cache_in_root(cfg.defaults),
                 progress=progress,
+                extra_algos=extra_algos,
                 v=v,
             )
             if progress:
@@ -166,6 +174,7 @@ def cmd_hash(argv: Optional[List[str]] = None) -> int:
                 full=args.full,
                 local_cache_in_root=job.resolved_local_cache_in_root(cfg.defaults),
                 progress=progress,
+                extra_algos=extra_algos,
                 v=v,
             )
             if progress:
