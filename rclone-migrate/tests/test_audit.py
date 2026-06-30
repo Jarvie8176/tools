@@ -112,9 +112,11 @@ def test_lock_contention_raises(tmp_path: Path):
     with LockContention rather than silently corrupt state."""
     fh = audit._acquire_job_lock(tmp_path, op="check")
     try:
+        # Entering a second audit.run while the lock is held raises on
+        # __enter__ — drive it directly so there's no unreachable with-body.
+        cm = audit.run(tmp_path, op="copy")
         with pytest.raises(audit.LockContention) as exc:
-            with audit.run(tmp_path, op="copy") as ev:
-                pass  # never reached
+            cm.__enter__()
         # The error message should identify the holder
         assert exc.value.holder_pid == os.getpid()
         assert exc.value.holder_op == "check"
