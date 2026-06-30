@@ -758,6 +758,67 @@ def cmd_export_mhl(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def cmd_import(argv: Optional[List[str]] = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="rmig import",
+        description="Seed a side's local hash cache from an external fixity CSV "
+                    "(xxhsum / rclone hashsum / an offload ledger / a CSV that "
+                    "`export-mhl` wrote elsewhere). Read-direction pair of the "
+                    "exporter.",
+    )
+    _add_common(p)
+    p.add_argument("--side", choices=["src", "dst"], required=True,
+                   help="Which side's cache to seed (required; no 'both' — a "
+                        "CSV describes one tree)")
+    p.add_argument("--csv", required=True,
+                   help="CSV file. Header-driven columns: "
+                        "path,algorithm,hash,size,mtime,source "
+                        "(path+hash required; order irrelevant)")
+    p.add_argument("--algorithm",
+                   help="Assert the CSV's algorithm; must equal the job's "
+                        "negotiated algo (guards against silent algo drift)")
+    p.add_argument("--stat", action="store_true",
+                   help="Fill size/mtime from the live file when the CSV omits "
+                        "them (mtime is what rmig trusts for cache-staleness)")
+    p.add_argument("--prune", action="store_true",
+                   help="Subtree refresh: delete existing rows under the "
+                        "imported paths' common prefix before insert (drops "
+                        "orphan rows left by renames/moves)")
+    p.add_argument("--source", default="csv-import",
+                   help="Provenance written to rows lacking a `source` column "
+                        "(default: csv-import)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Validate + report counts without writing anything")
+    args = p.parse_args(argv)
+    cfg, job = _load(args)
+    v = _make_verbose(args)
+
+    from . import importer as importer_mod
+    from .ops import negotiate_algo
+
+    state_dir = cfg.state_dir_for(job)
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with audit_mod.run(state_dir, op="import") as ev:
+        try:
+            algo = negotiate_algo(job, cfg)
+            ev.set_algo(algo)
+            inserted, pruned = importer_mod.do_import(
+                cfg, job,
+                side=args.side, csv_path=args.csv,
+                expected_algo=algo, algorithm_override=args.algorithm,
+                stat=args.stat, prune=args.prune,
+                source_default=args.source, dry_run=args.dry_run,
+                v=v,
+            )
+        except importer_mod.ImportError_ as e:
+            v.error(f"import: {e}")
+            ev.set_result("fail")
+            return 2
+        ev.set_counts(**{args.side: inserted}, affected=inserted)
+        ev.set_result("ok")
+    return 0
+
+
 def cmd_profiles(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="rmig profiles",
@@ -971,6 +1032,7 @@ def delete_cmd() -> None: sys.exit(_safe_exit(cmd_delete))
 def log_cmd() -> None: sys.exit(cmd_log())
 def file_status_cmd() -> None: sys.exit(cmd_file_status())
 def init_cmd() -> None: sys.exit(cmd_init())
+def import_cmd() -> None: sys.exit(_safe_exit(cmd_import))
 
 
 def main(argv: Optional[List[str]] = None) -> None:
@@ -982,7 +1044,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rmig {init|hash|copy|check|delete|list-jobs|log|"
-            "file-status|profiles|export-mhl} [options]\n"
+            "file-status|profiles|export-mhl|import} [options]\n"
             "       rmig --version",
             file=sys.stderr,
         )
@@ -993,7 +1055,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         "delete": cmd_delete, "list-jobs": cmd_list_jobs,
         "log": cmd_log, "file-status": cmd_file_status,
         "init": cmd_init, "profiles": cmd_profiles,
-        "export-mhl": cmd_export_mhl,
+        "export-mhl": cmd_export_mhl, "import": cmd_import,
     }
     if sub not in table:
         print(f"unknown subcommand: {sub}", file=sys.stderr)

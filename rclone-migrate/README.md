@@ -299,6 +299,50 @@ pip install ascmhl && ascmhl verify <root>
 See [docs/mhl-integration.md](docs/mhl-integration.md) for op→generation
 mapping, XML structure, and current limitations.
 
+## Import external fixity (`rmig import`)
+
+`rmig-hash` is normally the only way hashes enter the cache — rmig computes
+them itself. But fixity is often produced *outside* rmig: `xxhsum -H128`,
+`rclone hashsum`, an offload ledger, or a CSV that `export-mhl` wrote on
+another host. `rmig import` is the read-direction pair of the exporter: it
+`INSERT OR REPLACE`s an external CSV into a side's local `hash_cache` — the
+same store `rmig-hash` fills — so you can **hash at the source, carry the CSV,
+and verify at the destination without re-reading TBs**.
+
+```bash
+rmig import -j JOB --side {src,dst} --csv FILE \
+    [--algorithm xxh128] [--stat] [--prune] [--source NAME] [--dry-run]
+```
+
+CSV columns are **header-driven** (order irrelevant); only `path` and `hash`
+are required. See [templates/hash-cache.csv](templates/hash-cache.csv):
+
+```csv
+path,algorithm,hash,size,mtime,source
+photos/2026/04/04/DSCF0270.JPG,xxh128,576c1ab91e83e097e759feaf12a3245d,8812345,1717459200.0,xxhsum
+```
+
+| column | required | notes |
+|---|---|---|
+| `path` | yes | relative to the side's root, or absolute *under* it (normalized on import) |
+| `hash` | yes | hex digest; stored lowercased |
+| `algorithm` | no | must equal the job's negotiated algo — a mismatch is **refused** (silent algo drift is the dangerous failure) |
+| `size`, `mtime` | no | required by the cache schema; supply them or pass `--stat` to read them off disk |
+| `source` | no | provenance; falls back to `--source`, then `csv-import` |
+
+- `--stat` fills missing `size`/`mtime` from the live file. `mtime` is what
+  rmig trusts for cache-staleness, so a row whose `mtime` ≠ the file's is
+  later treated as stale and re-hashed (safe — never wrong, just redundant).
+- `--prune` does a **subtree refresh**: it deletes existing rows under the
+  imported paths' common directory prefix before inserting, so files that were
+  renamed or moved don't leave orphan rows. The prefix and the delete count
+  are logged; pair with `--dry-run` to preview.
+- Validation is **all-or-nothing** — one bad row aborts before any write.
+
+Import records the algorithm in `state.db`, so `rmig file-status` can resolve
+imported rows even with no prior `rmig-hash` run. Related: #19 (MHL/algorithm
+semantics), `export-mhl` (the write direction).
+
 ## Src manifest CSV (default on)
 
 After each successful `copy`, rmig drops a CSV at
@@ -610,6 +654,10 @@ rclone-migrate/
     state.py         # central state.db
     manifest.py      # unifying abstraction (local / remote-live / remote-cached)
     ops.py           # copy / check / delete glue
+    mhl.py           # ASC MHL v2.0 emitter (export-mhl)
+    importer.py      # external-fixity CSV → hash_cache (import)
+  templates/
+    hash-cache.csv   # documented CSV template for `rmig import`
   tests/
     test_config.py
     test_cache.py
