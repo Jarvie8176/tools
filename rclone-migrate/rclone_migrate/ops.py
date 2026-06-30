@@ -196,8 +196,14 @@ def negotiate_algo(job: Job, cfg: Config) -> str:
     override = job.hash or cfg.defaults.hash
     if override:
         # Single-algo override short-circuits profile resolution; profile
-        # warnings are intentionally not surfaced here.
-        return hashing.negotiate(job.src, job.dst, override=override)
+        # warnings are intentionally not surfaced here. When the job opts into
+        # `download`, a remote side may satisfy the override via download-and-
+        # hash even if it doesn't advertise the algo (#76) — pass that through.
+        allow_download = job.resolved_download(cfg.defaults)
+        return hashing.negotiate(
+            job.src, job.dst, override=override, allow_download=allow_download,
+        )
+    # Auto-negotiation never opts into download (would silently pull every byte).
     priority = cfg.resolve_priority(job)
     return hashing.negotiate(job.src, job.dst, priority=priority)
 

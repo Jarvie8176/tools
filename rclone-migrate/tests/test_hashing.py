@@ -173,3 +173,66 @@ def test_negotiate_local_auto_unchanged_still_sha256(monkeypatch):
     rclone_local = ["md5", "sha1", "sha256", "crc32", "whirlpool"]
     monkeypatch.setattr(hashing, "supported_hashes", lambda p: rclone_local)
     assert hashing.negotiate("/a", "/b") == "sha256"
+
+
+# --- remote download-and-hash unblocks an explicit override (#76) -------------
+
+def test_effective_supported_remote_with_download_adds_streamable(monkeypatch):
+    """A remote side with allow_download=True can yield download-and-hash algos
+    (rmig pulls bytes), so xxh128 becomes obtainable even un-advertised."""
+    monkeypatch.setattr(hashing, "supported_hashes", lambda p: ["sha1"])
+    assert hashing.effective_supported("b2:bucket") == {"sha1"}        # default
+    eff = hashing.effective_supported("b2:bucket", allow_download=True)
+    assert "xxh128" in eff and "sha1" in eff
+
+
+def test_negotiate_remote_override_xxh128_passes_with_download(monkeypatch):
+    """#76: an explicit override of a download-only algo against a remote
+    negotiates when the job opted into download (routes to the existing
+    _refresh_remote(download=True) path)."""
+    monkeypatch.setattr(hashing, "supported_hashes",
+                        lambda p: ["md5", "sha1", "sha256"])
+    assert hashing.negotiate(
+        "/local/src", "sftp:host/path", override="xxh128", allow_download=True,
+    ) == "xxh128"
+
+
+def test_negotiate_remote_override_xxh128_still_raises_without_download(monkeypatch):
+    """Without download (default), a non-advertised remote override still
+    raises — the gate doesn't widen silently."""
+    monkeypatch.setattr(hashing, "supported_hashes",
+                        lambda p: ["md5", "sha1", "sha256"])
+    with pytest.raises(hashing.HashNegotiationError):
+        hashing.negotiate("/local/src", "sftp:host/path", override="xxh128")
+
+
+def test_negotiate_auto_never_download_only_even_if_allowed(monkeypatch):
+    """allow_download must NOT leak into auto-negotiation: with no override, a
+    remote contributes advertised-only, so a download-only algo is never
+    silently selected (no surprise full-tree download)."""
+    def fake(path):
+        return {"/local/src": ["md5", "sha1", "sha256", "xxh128"],
+                "sftp:host/path": ["sha1"]}[path]
+    monkeypatch.setattr(hashing, "supported_hashes", fake)
+    # allow_download passed but no override → auto path ignores it → sha1 (the
+    # only advertised common), NOT xxh128.
+    assert hashing.negotiate(
+        "/local/src", "sftp:host/path", allow_download=True,
+    ) == "sha1"
+
+
+def test_negotiate_algo_threads_download_for_override(monkeypatch):
+    """ops.negotiate_algo passes the job's resolved `download` into negotiate so
+    a download=true job can pin a non-advertised remote algo (#76); download=
+    false still raises."""
+    from rclone_migrate import config as cfgmod
+    from rclone_migrate import ops
+    monkeypatch.setattr(hashing, "supported_hashes", lambda p: ["sha1"])
+    cfg = cfgmod.Config(defaults=cfgmod.Defaults())
+    job_dl = cfgmod.Job(name="j", src="/local", dst="sftp:host/p",
+                        hash="xxh128", download=True)
+    assert ops.negotiate_algo(job_dl, cfg) == "xxh128"
+    job_no = cfgmod.Job(name="j", src="/local", dst="sftp:host/p",
+                        hash="xxh128", download=False)
+    with pytest.raises(hashing.HashNegotiationError):
+        ops.negotiate_algo(job_no, cfg)
