@@ -269,7 +269,13 @@ def run(state_dir: Path, *, op: str,
     except BaseException:
         if ev.result == "ok":
             ev.set_result("fail")
-        ev.set_notes("exception:\n" + traceback.format_exc())
+        tb = traceback.format_exc()
+        ev.set_notes("exception:\n" + tb)
+        # Persist the cause to the run-log file too (#52) — not only state.db —
+        # so `rmig log` / the .log audit trail surfaces the failure reason
+        # (incl. wrapped rclone stderr) even after the terminal scrolls away.
+        # log_fh is always open here (markers are written unconditionally).
+        log_fh.write(tb)
         raise
     finally:
         if capture_stdout:

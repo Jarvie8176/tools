@@ -84,14 +84,39 @@ def test_exception_records_fail(tmp_path: Path):
     conn.close()
 
 
+def test_exception_traceback_in_log_file(tmp_path: Path):
+    """#52: a failed op's cause (exception traceback, incl. any wrapped
+    subprocess stderr) must land in the run-log *file*, not only state.db
+    notes — the prior bug left the .log with markers + result=fail only."""
+    rclone_err = "rclone copyto failed (exit 1):\nERROR : DSCF1224.JPG: errno -1"
+    with pytest.raises(RuntimeError):
+        with audit.run(tmp_path, op="copy") as ev:
+            raise RuntimeError(rclone_err)
+
+    conn = state.open_db(tmp_path)
+    rows = state.query_events(conn)
+    r = rows[0]
+    assert r["result"] == "fail"
+    # state.db notes carries it (pre-existing) ...
+    assert "errno -1" in (r["notes"] or "")
+    # ... AND now the run-log file does too (the #52 fix).
+    text = (tmp_path / r["log_path"]).read_text()
+    assert "errno -1" in text
+    assert "RuntimeError" in text
+    assert "result=fail" in text
+    conn.close()
+
+
 def test_lock_contention_raises(tmp_path: Path):
     """A second concurrent audit.run() on the same state_dir must fail
     with LockContention rather than silently corrupt state."""
     fh = audit._acquire_job_lock(tmp_path, op="check")
     try:
+        # Entering a second audit.run while the lock is held raises on
+        # __enter__ — drive it directly so there's no unreachable with-body.
+        cm = audit.run(tmp_path, op="copy")
         with pytest.raises(audit.LockContention) as exc:
-            with audit.run(tmp_path, op="copy") as ev:
-                pass  # never reached
+            cm.__enter__()
         # The error message should identify the holder
         assert exc.value.holder_pid == os.getpid()
         assert exc.value.holder_op == "check"
