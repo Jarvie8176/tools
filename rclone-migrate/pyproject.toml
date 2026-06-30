@@ -1,6 +1,6 @@
 [project]
 name = "rclone-migrate"
-version = "0.9.3"
+version = "0.10.0"
 description = "Safe rclone migration with copy → check → delete and persisted checksums"
 requires-python = ">=3.9"
 dependencies = [
@@ -32,6 +32,7 @@ rmig-delete = "rclone_migrate.cli:delete_cmd"
 rmig-log = "rclone_migrate.cli:log_cmd"
 rmig-file-status = "rclone_migrate.cli:file_status_cmd"
 rmig-init = "rclone_migrate.cli:init_cmd"
+rmig-import = "rclone_migrate.cli:import_cmd"
 
 [build-system]
 requires = ["setuptools>=61"]

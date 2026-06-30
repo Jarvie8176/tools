@@ -106,9 +106,16 @@ def open_db(db_path: Path) -> sqlite3.Connection:
             size       INTEGER NOT NULL,
             mtime      REAL NOT NULL,
             refreshed  REAL NOT NULL,
+            source     TEXT,
             PRIMARY KEY (path, algorithm)
         )
     """)
+    # Migrate dbs created before the `source` column existed (provenance
+    # for `rmig import`; NULL = computed in-process by rmig-hash). Cheap and
+    # idempotent: ADD COLUMN is metadata-only in SQLite.
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(hash_cache)")}
+    if "source" not in cols:
+        conn.execute("ALTER TABLE hash_cache ADD COLUMN source TEXT")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_hash ON hash_cache(algorithm, hash)")
     conn.execute(
         "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
@@ -270,6 +277,96 @@ def delete_paths_for_algorithm(
         "DELETE FROM hash_cache WHERE path = ? AND algorithm = ?", payload
     )
     conn.commit()
+
+
+# --- external-fixity import (rmig import) ---------------------------------
+
+@dataclass
+class ImportEntry:
+    """One row destined for hash_cache via `rmig import`. Like CacheEntry but
+    carries `source` provenance (CacheEntry rows are rmig-computed → NULL)."""
+    path: str       # relative to root
+    algorithm: str
+    hash: str
+    size: int
+    mtime: float
+    source: Optional[str] = None
+
+
+def _like_escape(s: str) -> str:
+    """Escape LIKE wildcards so a literal path prefix matches literally.
+
+    Paths routinely contain `_` (e.g. `2026-04-04_DSCF0270.JPG`), which LIKE
+    treats as "any single char" — unescaped it would over-match and delete
+    siblings. Pair with ``ESCAPE '\\'``."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def import_many(
+    conn: sqlite3.Connection,
+    entries: Iterable[ImportEntry],
+    refreshed: float,
+) -> int:
+    """INSERT OR REPLACE imported fixity rows. Returns the row count written."""
+    payload = [
+        (e.path, e.algorithm, e.hash, e.size, e.mtime, refreshed, e.source)
+        for e in entries
+    ]
+    if not payload:
+        return 0
+    conn.executemany(
+        "INSERT OR REPLACE INTO hash_cache "
+        "(path, algorithm, hash, size, mtime, refreshed, source) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?)",
+        payload,
+    )
+    conn.commit()
+    return len(payload)
+
+
+def count_under_prefix(
+    conn: sqlite3.Connection, prefix: str, algorithm: str
+) -> int:
+    """Count rows for `algorithm` at exactly `prefix` or under `prefix/`.
+
+    Empty prefix means the whole algorithm subtree (every row for the side).
+    """
+    prefix = prefix.rstrip("/")
+    if not prefix:
+        row = conn.execute(
+            "SELECT count(*) FROM hash_cache WHERE algorithm = ?", (algorithm,)
+        ).fetchone()
+        return int(row[0])
+    like = _like_escape(prefix) + "/%"
+    row = conn.execute(
+        "SELECT count(*) FROM hash_cache WHERE algorithm = ? "
+        "AND (path = ? OR path LIKE ? ESCAPE '\\')",
+        (algorithm, prefix, like),
+    ).fetchone()
+    return int(row[0])
+
+
+def delete_under_prefix(
+    conn: sqlite3.Connection, prefix: str, algorithm: str
+) -> int:
+    """Delete rows for `algorithm` at exactly `prefix` or under `prefix/`
+    (subtree refresh — drops orphan rows left by renames/moves). Empty
+    prefix clears the whole algorithm subtree. Returns rows deleted."""
+    prefix = prefix.rstrip("/")
+    if not prefix:
+        cur = conn.execute(
+            "DELETE FROM hash_cache WHERE algorithm = ?", (algorithm,)
+        )
+        conn.commit()
+        return cur.rowcount
+    like = _like_escape(prefix) + "/%"
+    cur = conn.execute(
+        "DELETE FROM hash_cache WHERE algorithm = ? "
+        "AND (path = ? OR path LIKE ? ESCAPE '\\')",
+        (algorithm, prefix, like),
+    )
+    conn.commit()
+    return cur.rowcount
 
 
 @dataclass
