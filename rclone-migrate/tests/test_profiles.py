@@ -288,10 +288,11 @@ def test_negotiate_priority_falls_back_to_default(monkeypatch):
     def fake(path):
         return ["md5", "sha1"]   # neither side has anything exotic
     monkeypatch.setattr(hashing, "supported_hashes", fake)
+    # Remote↔remote so the advertised set IS the effective set (local sides
+    # would be augmented with rmig's in-process sha256 etc. — see #75).
     # Profile asks for blake3/sha256 — neither is in common; fall back to
-    # PREFERRED_ORDER → md5 (since sha256 isn't common, sha1 is, then md5).
-    # PREFERRED_ORDER first match: sha1.
-    assert hashing.negotiate("/a", "/b",
+    # PREFERRED_ORDER → first common match is sha1.
+    assert hashing.negotiate("remote:a", "remote:b",
                              priority=["blake3", "sha256"]) == "sha1"
 
 
@@ -299,11 +300,12 @@ def test_negotiate_priority_skips_unsupported(monkeypatch):
     def fake(path):
         return {
             "/a": ["md5", "sha1", "sha256"],
-            "b:": ["sha1"],   # B2-like
+            "b2:bucket": ["sha1"],   # genuinely remote (is_local('b:') is True!)
         }[path]
     monkeypatch.setattr(hashing, "supported_hashes", fake)
-    # Profile prefers sha256 first, but b: only has sha1 → falls to sha1
-    assert hashing.negotiate("/a", "b:", priority=["sha256", "sha1"]) == "sha1"
+    # Profile prefers sha256 first, but the remote dst only has sha1 → sha1.
+    assert hashing.negotiate("/a", "b2:bucket",
+                             priority=["sha256", "sha1"]) == "sha1"
 
 
 # --- ops.negotiate_algo wiring -----------------------------------------------
