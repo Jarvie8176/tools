@@ -12,6 +12,7 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib  # type: ignore
 
+from . import identity as identity_mod
 from . import profiles as profiles_mod
 
 
@@ -275,6 +276,10 @@ def load(path: str | Path) -> Config:
         raw = tomllib.load(f)
 
     d = raw.get("defaults", {})
+    # Per-user identity fallback (#11): MHL identity fields left unset by
+    # [defaults] fall back to ${XDG_CONFIG_HOME:-~/.config}/rclone-migrate/
+    # identity.toml. [defaults] (and per-job, downstream) still win.
+    ident = identity_mod.load_identity()
     defaults = Defaults(
         hash=d.get("hash"),
         hash_profile=d.get("hash_profile"),
@@ -290,10 +295,10 @@ def load(path: str | Path) -> Config:
         ),
         resumable_min_size=str(d.get("resumable_min_size", Defaults.resumable_min_size)),
         emit_mhl=bool(d.get("emit_mhl", Defaults.emit_mhl)),
-        mhl_author=d.get("mhl_author"),
-        mhl_author_phone=d.get("mhl_author_phone"),
-        mhl_author_role=d.get("mhl_author_role"),
-        mhl_location=d.get("mhl_location"),
+        mhl_author=d.get("mhl_author") or ident.get("mhl_author"),
+        mhl_author_phone=d.get("mhl_author_phone") or ident.get("mhl_author_phone"),
+        mhl_author_role=d.get("mhl_author_role") or ident.get("mhl_author_role"),
+        mhl_location=d.get("mhl_location") or ident.get("mhl_location"),
         mhl_comment=d.get("mhl_comment"),
         mhl_sides=_as_str_list(
             d.get("mhl_sides"), "mhl_sides", "[defaults]",

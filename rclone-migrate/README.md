@@ -269,6 +269,20 @@ ones of the same name. Inline `[profiles.<name>]` in the job TOML wins over
 both. See [docs/profiles.md](docs/profiles.md) for full schema, three more
 sample profiles (`backup`/`speed`/`compat`), and a comparison matrix.
 
+#### Secondary hashes (`multi_hash`)
+
+A profile may declare `multi_hash = ["..."]` to record extra algorithms
+*alongside* the negotiated primary. During `rmig hash` each file is read once
+and all algorithms are computed together (local sides) and written to the
+cache, so e.g. the `forensic` profile records both SHA-256 and MD5
+(NIST/EnCase-style dual fixity). Adding `multi_hash` to an existing job
+backfills the secondary onto already-hashed files without re-deriving the
+primary — useful for migrating a job from one algorithm to another while
+keeping the old hashes. Remote sides compute each extra algorithm in a
+separate pass (a non-native algorithm there means downloading every byte —
+rmig warns before doing so). The src/dst manifests and `check` continue to use
+the single primary algorithm; the secondaries live in the cache.
+
 ## ASC MHL v2.0 output (opt-in)
 
 Set `emit_mhl = true` in `[defaults]` or per-job to make rmig write
@@ -667,6 +681,7 @@ rclone-migrate/
     ops.py           # copy / check / delete glue
     mhl.py           # ASC MHL v2.0 emitter (export-mhl)
     importer.py      # external-fixity CSV → hash_cache (import)
+    identity.py      # per-user MHL identity (identity.toml)
   templates/
     hash-cache.csv   # documented CSV template for `rmig import`
   tests/

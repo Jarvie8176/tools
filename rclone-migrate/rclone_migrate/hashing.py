@@ -179,6 +179,45 @@ def hash_file_local(
     return result
 
 
+def hash_file_local_multi(
+    path: str,
+    algos: List[str],
+    chunk_size: int = 1 << 20,
+    progress_cb=None,
+) -> dict:
+    """Compute several hashes of a local file, reading the bytes once (#10).
+
+    Streamable algos (hashlib + the xxhash family) share a single sequential
+    read — N hashers updated per chunk. Any non-streamable algo (e.g. crc32 /
+    blake3 without a lib) falls back to a per-algo ``hash_file_local`` (which
+    shells out to ``rclone hashsum``) — a separate read each, unavoidable.
+
+    ``progress_cb`` fires once per chunk of the single shared read, so the
+    meter advances at the streamed file's byte rate (it does *not* fire for
+    the subprocess fallbacks). Returns ``{algo: hexdigest}``.
+    """
+    algos = list(dict.fromkeys(algos))  # dedupe, keep order
+    streamable = [a for a in algos if can_stream_local(a)]
+    other = [a for a in algos if not can_stream_local(a)]
+    out: dict = {}
+    if streamable:
+        hs = {
+            a: (hashlib.new(a) if a in HASHLIB_SUPPORTED else _XXHASH_CTORS[a]())
+            for a in streamable
+        }
+        with open(path, "rb") as f:
+            while chunk := f.read(chunk_size):
+                for h in hs.values():
+                    h.update(chunk)
+                if progress_cb is not None:
+                    progress_cb(len(chunk))
+        for a, h in hs.items():
+            out[a] = h.hexdigest()
+    for a in other:
+        out[a] = hash_file_local(path, a)
+    return out
+
+
 def normalize(algo: str) -> str:
     """Normalize user-typed hash names to rclone's lowercase form."""
     a = algo.strip().lower()
