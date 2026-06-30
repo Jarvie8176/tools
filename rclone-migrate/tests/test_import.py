@@ -39,6 +39,49 @@ def _csv(tmp_path: Path, text: str) -> str:
     return str(p)
 
 
+# --- algorithm resolution (must NOT probe the live backend) -------------------
+
+def test_resolve_import_algo_uses_config_not_backend(tmp_path: Path):
+    """Regression: import must take the algo from config, never from a live
+    backend probe — else importing xxh128 onto a local fs that doesn't
+    advertise it aborts before any write (the whole use case). No rclone."""
+    from rclone_migrate import cli
+    cfg_path = tmp_path / "c.toml"
+    sd = tmp_path / "state"; sd.mkdir()
+    cfg_path.write_text(
+        "[defaults]\n"
+        f"state_dir = '{sd}'\n"
+        "hash = 'XXH128'\n"           # configured; local fs can't advertise it
+        "[[jobs]]\n"
+        "name = 't'\n"
+        f"src = '{tmp_path / 'src'}'\n"
+        f"dst = '{tmp_path / 'dst'}'\n"
+    )
+    cfg = config_mod.load(cfg_path)
+    job = cfg.get_job("t")
+    # Would raise HashNegotiationError if it probed the backend; instead it
+    # returns the normalized configured algo.
+    assert cli._resolve_import_algo(cfg, job) == "xxh128"
+
+
+def test_resolve_import_algo_per_job_overrides_default(tmp_path: Path):
+    from rclone_migrate import cli
+    cfg_path = tmp_path / "c.toml"
+    sd = tmp_path / "state"; sd.mkdir()
+    cfg_path.write_text(
+        "[defaults]\n"
+        f"state_dir = '{sd}'\n"
+        "hash = 'md5'\n"
+        "[[jobs]]\n"
+        "name = 't'\n"
+        "hash = 'sha-1'\n"
+        f"src = '{tmp_path / 'src'}'\n"
+        f"dst = '{tmp_path / 'dst'}'\n"
+    )
+    cfg = config_mod.load(cfg_path)
+    assert cli._resolve_import_algo(cfg, cfg.get_job("t")) == "sha1"  # alias norm
+
+
 # --- cache layer --------------------------------------------------------------
 
 def test_source_column_migrated_onto_legacy_db(tmp_path: Path):

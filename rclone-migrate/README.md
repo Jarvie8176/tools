@@ -326,7 +326,7 @@ photos/2026/04/04/DSCF0270.JPG,xxh128,576c1ab91e83e097e759feaf12a3245d,8812345,1
 |---|---|---|
 | `path` | yes | relative to the side's root, or absolute *under* it (normalized on import) |
 | `hash` | yes | hex digest; stored lowercased |
-| `algorithm` | no | must equal the job's negotiated algo — a mismatch is **refused** (silent algo drift is the dangerous failure) |
+| `algorithm` | no | must equal the job's configured algo (`[defaults].hash` / per-job `hash`) — a mismatch is **refused** (silent algo drift is the dangerous failure) |
 | `size`, `mtime` | no | required by the cache schema; supply them or pass `--stat` to read them off disk |
 | `source` | no | provenance; falls back to `--source`, then `csv-import` |
 
@@ -338,6 +338,17 @@ photos/2026/04/04/DSCF0270.JPG,xxh128,576c1ab91e83e097e759feaf12a3245d,8812345,1
   renamed or moved don't leave orphan rows. The prefix and the delete count
   are logged; pair with `--dry-run` to preview.
 - Validation is **all-or-nothing** — one bad row aborts before any write.
+
+Unlike `hash`/`copy`/`check`, **import does not probe the live backend** for
+the algorithm — its whole point is to ingest hashes the backend *can't compute
+itself* (e.g. `xxh128` from `xxhsum`, when rclone's local backend doesn't even
+advertise xxh128). The expected algo is the job's **configured** hash, so pin
+it explicitly when importing an external algorithm:
+
+```toml
+[defaults]
+hash = "xxh128"     # what your CSV carries; import won't negotiate it live
+```
 
 Import records the algorithm in `state.db`, so `rmig file-status` can resolve
 imported rows even with no prior `rmig-hash` run. Related: #19 (MHL/algorithm

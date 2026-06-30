@@ -221,7 +221,7 @@ def do_import(
         ovr = normalize_algo(algorithm_override)
         if ovr != expected_algo:
             raise ImportError_(
-                f"--algorithm '{algorithm_override}' != job's negotiated "
+                f"--algorithm '{algorithm_override}' != job's configured "
                 f"algorithm '{expected_algo}' (silent algo drift refused)"
             )
 

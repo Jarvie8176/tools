@@ -758,6 +758,29 @@ def cmd_export_mhl(argv: Optional[List[str]] = None) -> int:
     return 0
 
 
+def _resolve_import_algo(cfg, job) -> str:
+    """Algorithm `rmig import` expects the CSV to carry.
+
+    Unlike hash/copy/check, import must NOT probe the live backend. Its whole
+    purpose is to ingest hashes the backend *cannot compute itself* — e.g.
+    xxh128 produced by `xxhsum`, when rclone's local backend doesn't even
+    advertise xxh128. Routing through `negotiate_algo` (which requires both
+    sides to natively support the algo) would abort exactly that use case
+    before a single row is written.
+
+    So the expected algo is the job's *configured* hash (`job.hash` /
+    `[defaults].hash`), normalized — not a live capability probe. Per-row
+    `algorithm` columns and `--algorithm` are still validated against it in
+    `do_import`. Only when the job leaves the algo unset do we fall back to
+    live negotiation (a job that relies on a natively-negotiated algo)."""
+    from . import hashing as hashing_mod
+    from .ops import negotiate_algo
+    configured = job.hash or cfg.defaults.hash
+    if configured:
+        return hashing_mod.normalize(configured)
+    return negotiate_algo(job, cfg)
+
+
 def cmd_import(argv: Optional[List[str]] = None) -> int:
     p = argparse.ArgumentParser(
         prog="rmig import",
@@ -776,7 +799,7 @@ def cmd_import(argv: Optional[List[str]] = None) -> int:
                         "(path+hash required; order irrelevant)")
     p.add_argument("--algorithm",
                    help="Assert the CSV's algorithm; must equal the job's "
-                        "negotiated algo (guards against silent algo drift)")
+                        "configured algo (guards against silent algo drift)")
     p.add_argument("--stat", action="store_true",
                    help="Fill size/mtime from the live file when the CSV omits "
                         "them (mtime is what rmig trusts for cache-staleness)")
@@ -794,13 +817,12 @@ def cmd_import(argv: Optional[List[str]] = None) -> int:
     v = _make_verbose(args)
 
     from . import importer as importer_mod
-    from .ops import negotiate_algo
 
     state_dir = cfg.state_dir_for(job)
     state_dir.mkdir(parents=True, exist_ok=True)
     with audit_mod.run(state_dir, op="import") as ev:
         try:
-            algo = negotiate_algo(job, cfg)
+            algo = _resolve_import_algo(cfg, job)
             ev.set_algo(algo)
             inserted, pruned = importer_mod.do_import(
                 cfg, job,
