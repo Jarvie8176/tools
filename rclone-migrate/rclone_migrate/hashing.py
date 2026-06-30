@@ -58,9 +58,37 @@ class HashNegotiationError(RuntimeError):
 
 
 def supported_hashes(path: str) -> List[str]:
-    """Return rclone-reported hash list for the backend serving `path` (lowercase)."""
+    """Return rclone-reported hash list for the backend serving `path` (lowercase).
+
+    This is the rclone backend's *advertised* capability only. For what rmig
+    can actually obtain for a path (which, for local paths, also covers algos
+    rmig streams in-process), use `effective_supported`."""
     feats = rclone.backend_features(path)
     return [h.lower() for h in feats.get("Hashes", [])]
+
+
+def local_streamable_algos() -> set:
+    """Algos rmig computes itself for a *local* file — hashlib + the xxhash
+    family (when the `xxhash` package is importable) — independent of what the
+    rclone backend advertises."""
+    return set(HASHLIB_SUPPORTED) | set(_XXHASH_CTORS)
+
+
+def effective_supported(path: str) -> set:
+    """Hashes rmig can actually obtain for `path`.
+
+    Local path: the rclone backend's advertised set PLUS anything rmig streams
+    in-process (`manifest._refresh_local` hashes local bytes itself via
+    `hash_file_local`), so e.g. `xxh128` is available even though rclone's
+    *local* backend doesn't advertise it.
+
+    Remote path: strictly the backend's advertised set — rmig can't hash bytes
+    it doesn't hold without downloading them (a separate, opt-in path), so the
+    negotiation gate stays honest about what the remote can natively produce."""
+    s = set(supported_hashes(path))
+    if rclone.is_local(path):
+        s |= local_streamable_algos()
+    return s
 
 
 def negotiate(
@@ -73,26 +101,27 @@ def negotiate(
     """Pick the best hash algorithm shared by both endpoints.
 
     `override` (case-insensitive) forces a specific algorithm; raises if either
-    side doesn't list it. Returns rclone's lowercase hash name.
+    side can't provide it — rclone-advertised, or rmig-streamable for local
+    sides (see `effective_supported`). Returns rclone's lowercase hash name.
 
     `priority` overrides the built-in PREFERRED_ORDER for this call (e.g.
     sourced from a profile). Items missing from the common set are skipped;
     fall back to PREFERRED_ORDER → any-common if `priority` exhausts.
     """
-    src_h = set(supported_hashes(src))
-    dst_h = set(supported_hashes(dst))
+    src_h = effective_supported(src)
+    dst_h = effective_supported(dst)
 
     if override:
         algo = override.lower()
         if algo not in src_h:
             raise HashNegotiationError(
-                f"src ({src}) does not natively support hash '{algo}'. "
-                f"Supported: {sorted(src_h)}"
+                f"src ({src}) cannot provide hash '{algo}'. "
+                f"Available: {sorted(src_h)}"
             )
         if algo not in dst_h:
             raise HashNegotiationError(
-                f"dst ({dst}) does not natively support hash '{algo}'. "
-                f"Supported: {sorted(dst_h)}"
+                f"dst ({dst}) cannot provide hash '{algo}'. "
+                f"Available: {sorted(dst_h)}"
             )
         return algo
 

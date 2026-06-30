@@ -101,11 +101,13 @@ def test_negotiate_b2_picks_sha1(monkeypatch):
 
 
 def test_negotiate_override_must_be_supported(monkeypatch):
+    # Remote paths: effective_supported == advertised only, so an unadvertised
+    # override still raises (local sides are augmented — see #75 tests below).
     def fake(path):
         return ["md5"]
     monkeypatch.setattr(hashing, "supported_hashes", fake)
     with pytest.raises(hashing.HashNegotiationError):
-        hashing.negotiate("a", "b", override="sha256")
+        hashing.negotiate("remote:a", "remote:b", override="sha256")
 
 
 def test_negotiate_override_works(monkeypatch):
@@ -116,8 +118,58 @@ def test_negotiate_override_works(monkeypatch):
 
 
 def test_negotiate_no_common(monkeypatch):
+    # Remote↔remote with disjoint advertised sets — no in-process augmentation.
     def fake(path):
-        return {"a": ["md5"], "b": ["sha256"]}[path]
+        return {"remote:a": ["md5"], "remote:b": ["sha256"]}[path]
     monkeypatch.setattr(hashing, "supported_hashes", fake)
     with pytest.raises(hashing.HashNegotiationError):
-        hashing.negotiate("a", "b")
+        hashing.negotiate("remote:a", "remote:b")
+
+
+# --- local-side in-process hashing folds into negotiation (#75) ---------------
+
+def test_effective_supported_local_adds_streamable(monkeypatch):
+    """A local path offers rclone-advertised hashes PLUS what rmig streams
+    in-process (hashlib + xxhash), even if rclone's local backend doesn't
+    advertise them (it doesn't advertise xxh128)."""
+    monkeypatch.setattr(hashing, "supported_hashes",
+                        lambda p: ["md5", "sha1", "sha256", "crc32"])
+    eff = hashing.effective_supported("/mnt/nas/raw")
+    assert "xxh128" in eff and "xxh3" in eff   # via internal hasher
+    assert "crc32" in eff                       # advertised-only still present
+
+
+def test_effective_supported_remote_advertised_only(monkeypatch):
+    """Remote paths are NOT augmented — rmig can't hash bytes it doesn't hold
+    (the remote-download decoupling is tracked separately, D2 follow-up)."""
+    monkeypatch.setattr(hashing, "supported_hashes", lambda p: ["sha1"])
+    eff = hashing.effective_supported("b2:bucket")
+    assert eff == {"sha1"}
+    assert "xxh128" not in eff
+
+
+def test_negotiate_local_override_xxh128_without_backend_advertise(monkeypatch):
+    """Regression (#75): local↔local job pinned to xxh128 must negotiate even
+    though the rclone local backend advertises no xxh128. This was the
+    HashNegotiationError that aborted `rmig check`/`hash` before any work."""
+    rclone_local = ["md5", "sha1", "whirlpool", "crc32", "sha256",
+                    "dropbox", "hidrive", "mailru", "quickxor"]  # real local set
+    monkeypatch.setattr(hashing, "supported_hashes", lambda p: rclone_local)
+    assert hashing.negotiate("/a", "/b", override="xxh128") == "xxh128"
+
+
+def test_negotiate_remote_override_xxh128_still_raises(monkeypatch):
+    """D2 scope guard: a remote side that can't natively produce xxh128 still
+    raises — the local augmentation must not leak to remotes."""
+    monkeypatch.setattr(hashing, "supported_hashes",
+                        lambda p: ["md5", "sha1", "sha256"])
+    with pytest.raises(hashing.HashNegotiationError):
+        hashing.negotiate("/local/src", "sftp:host/path", override="xxh128")
+
+
+def test_negotiate_local_auto_unchanged_still_sha256(monkeypatch):
+    """Augmentation must not change auto-negotiation: sha256 still wins for
+    local↔local (PREFERRED_ORDER), xxh* only reachable via explicit override."""
+    rclone_local = ["md5", "sha1", "sha256", "crc32", "whirlpool"]
+    monkeypatch.setattr(hashing, "supported_hashes", lambda p: rclone_local)
+    assert hashing.negotiate("/a", "/b") == "sha256"
