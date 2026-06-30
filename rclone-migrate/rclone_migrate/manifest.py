@@ -145,6 +145,7 @@ def refresh(
     local_cache_in_root: bool = True,
     progress: bool = True,
     size_filter: Optional[Set[int]] = None,
+    extra_algos: Optional[List[str]] = None,
     v: Optional["verbose_mod.Verbose"] = None,
 ) -> Manifest:
     """Build an in-memory Manifest for `side`.
@@ -158,6 +159,9 @@ def refresh(
     if v is None:
         v = verbose_mod.default()
     root = job.src if side == "src" else job.dst
+    # multi_hash (#10): secondary algorithms recorded alongside the primary.
+    extras = [a for a in (extra_algos or []) if a != algorithm]
+    extras = list(dict.fromkeys(extras))
     if rclone.is_local(root):
         return _refresh_local(
             side, root, algorithm,
@@ -166,6 +170,7 @@ def refresh(
             fallback_dir=state_dir / "local-cache",
             progress=progress,
             size_filter=size_filter,
+            extra_algos=extras,
             v=v,
         )
     # Remote: unified path with checkpointed cache.
@@ -179,7 +184,7 @@ def refresh(
                  f"{sorted(hashing.supported_hashes(root))}")
         v.detail(f"  → {'native' if native else 'no native'} support for {algorithm}; "
                  f"{'no --download' if native else 'using --download'}")
-    return _refresh_remote(
+    m = _refresh_remote(
         side, root, algorithm,
         state_conn=state_conn,
         download=download or not native,
@@ -189,6 +194,28 @@ def refresh(
         size_filter=size_filter,
         v=v,
     )
+    # Secondary algos: a separate remote pass each (no single-read fast path
+    # off a remote — every byte must come over the wire). Non-native algos
+    # force --download, which can be slow/costly; warn so users size jobs.
+    for ex in extras:
+        ex_native = ex in hashing.supported_hashes(root)
+        if not ex_native:
+            v.warn(
+                f"[{side}] multi_hash '{ex}' is not native to this remote "
+                f"backend — computing it downloads every byte; this can be "
+                f"slow and incur egress cost."
+            )
+        _refresh_remote(
+            side, root, ex,
+            state_conn=state_conn,
+            download=download or not ex_native,
+            full=full,
+            progress=progress,
+            transfers=transfers,
+            size_filter=size_filter,
+            v=v,
+        )
+    return m
 
 
 def _refresh_local(
@@ -202,6 +229,7 @@ def _refresh_local(
     fallback_dir: Path,
     progress: bool,
     size_filter: Optional[Set[int]] = None,
+    extra_algos: Optional[List[str]] = None,
     v: Optional["verbose_mod.Verbose"] = None,
 ) -> Manifest:
     if v is None:
@@ -283,6 +311,27 @@ def _refresh_local(
         cached = {p: e for p, e in cached.items() if p in current}
     diff = cache.diff_against_filesystem(cached, current, full=full)
 
+    # multi_hash (#10): additionally record secondary algorithms alongside the
+    # primary. A file needs a given algo (re)hashed when it's stale/new for
+    # THAT algo's cache rows — so a file whose primary is already valid but
+    # which lacks a secondary hash (e.g. multi_hash added to an existing job,
+    # use case 3 "algorithm migration") still gets the secondary computed.
+    extras = [a for a in (extra_algos or []) if a != algorithm]
+    extras = list(dict.fromkeys(extras))
+    # rel -> [algos to compute for this file]
+    algos_needed: Dict[str, List[str]] = {}
+    for rel in diff.stale:
+        algos_needed.setdefault(rel, []).append(algorithm)
+    for rel in diff.new:
+        algos_needed.setdefault(rel, []).append(algorithm)
+    for ex in extras:
+        cached_ex = cache.load_for_algorithm(conn, ex)
+        if size_filter is not None:
+            cached_ex = {p: e for p, e in cached_ex.items() if p in current}
+        diff_ex = cache.diff_against_filesystem(cached_ex, current, full=full)
+        for rel in list(diff_ex.stale) + list(diff_ex.new):
+            algos_needed.setdefault(rel, []).append(ex)
+
     if progress:
         extra = f" filtered_out={skipped_by_size}" if size_filter is not None else ""
         v.info(
@@ -309,8 +358,9 @@ def _refresh_local(
     # cache every FLUSH_EVERY successful entries — so a network blip
     # midway through doesn't waste already-completed work.
     FLUSH_EVERY = 25
-    to_hash = list(diff.stale) + list(diff.new)
-    new_entries: List[cache.CacheEntry] = []
+    # Files needing ≥1 algo (re)hashed — primary stale/new ∪ any-extra stale/new.
+    to_hash = list(algos_needed.keys())
+    new_entries: List[cache.CacheEntry] = []  # PRIMARY entries → Manifest
     pending_flush: List[cache.CacheEntry] = []
     failures: List[Tuple[str, str]] = []
     new_lock = Lock()
@@ -331,15 +381,19 @@ def _refresh_local(
 
     def hash_one(rel: str) -> None:
         full_path = root_path / rel
+        needed = algos_needed[rel]
+        # Meter at byte-rate only if ≥1 needed algo streams in-process; a file
+        # that needs only a subprocess-fallback algo reports no chunk progress.
+        file_streamed = any(hashing.can_stream_local(a) for a in needed)
         wid = meter.worker_slot()
         t0 = time.time()
         try:
             st = full_path.stat()
             meter.worker_start(wid, rel, st.st_size)
-            h = hashing.hash_file_local(
-                str(full_path), algorithm,
+            digs = hashing.hash_file_local_multi(
+                str(full_path), needed,
                 progress_cb=(
-                    (lambda n: meter.worker_add(wid, n)) if streamed else None
+                    (lambda n: meter.worker_add(wid, n)) if file_streamed else None
                 ),
             )
         except (OSError, IOError) as e:
@@ -349,14 +403,17 @@ def _refresh_local(
             meter.worker_done(wid, ok=False)
             return
         with new_lock:
-            entry = cache.CacheEntry(
-                path=rel, hash=h, algorithm=algorithm,
-                size=st.st_size, mtime=st.st_mtime,
-            )
-            new_entries.append(entry)
-            pending_flush.append(entry)
-        meter.worker_done(wid, committed_size=None if streamed else st.st_size)
-        v.detail(f"    {rel}  {h}  ({time.time() - t0:.1f}s, {st.st_size:,}B)")
+            for a in needed:
+                entry = cache.CacheEntry(
+                    path=rel, hash=digs[a], algorithm=a,
+                    size=st.st_size, mtime=st.st_mtime,
+                )
+                pending_flush.append(entry)
+                if a == algorithm:
+                    new_entries.append(entry)  # only the primary feeds Manifest
+        meter.worker_done(wid, committed_size=None if file_streamed else st.st_size)
+        shown = digs.get(algorithm) or next(iter(digs.values()), "")
+        v.detail(f"    {rel}  {shown}  ({time.time() - t0:.1f}s, {st.st_size:,}B)")
 
     if to_hash:
         if progress:
