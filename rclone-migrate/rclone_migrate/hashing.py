@@ -74,7 +74,7 @@ def local_streamable_algos() -> set:
     return set(HASHLIB_SUPPORTED) | set(_XXHASH_CTORS)
 
 
-def effective_supported(path: str) -> set:
+def effective_supported(path: str, *, allow_download: bool = False) -> set:
     """Hashes rmig can actually obtain for `path`.
 
     Local path: the rclone backend's advertised set PLUS anything rmig streams
@@ -82,11 +82,17 @@ def effective_supported(path: str) -> set:
     `hash_file_local`), so e.g. `xxh128` is available even though rclone's
     *local* backend doesn't advertise it.
 
-    Remote path: strictly the backend's advertised set — rmig can't hash bytes
-    it doesn't hold without downloading them (a separate, opt-in path), so the
-    negotiation gate stays honest about what the remote can natively produce."""
+    Remote path, `allow_download=False` (default): strictly the backend's
+    advertised set — keeps auto-negotiation honest about what the remote can
+    natively produce, so it never silently selects an algo that would drag
+    every byte over the wire.
+
+    Remote path, `allow_download=True`: the job opted into `--download`, so
+    `_refresh_remote(download=True)` can pull bytes and hash them, making the
+    streamable set obtainable too (#76). Only ever set for an *explicit*
+    override — never for auto-negotiation."""
     s = set(supported_hashes(path))
-    if rclone.is_local(path):
+    if rclone.is_local(path) or allow_download:
         s |= local_streamable_algos()
     return s
 
@@ -97,22 +103,28 @@ def negotiate(
     override: Optional[str] = None,
     *,
     priority: Optional[List[str]] = None,
+    allow_download: bool = False,
 ) -> str:
     """Pick the best hash algorithm shared by both endpoints.
 
     `override` (case-insensitive) forces a specific algorithm; raises if either
-    side can't provide it — rclone-advertised, or rmig-streamable for local
-    sides (see `effective_supported`). Returns rclone's lowercase hash name.
+    side can't provide it — rclone-advertised, rmig-streamable for local sides,
+    or (with `allow_download`, an explicit-override-only opt-in, #76)
+    download-and-hash for remote sides. Returns rclone's lowercase hash name.
 
     `priority` overrides the built-in PREFERRED_ORDER for this call (e.g.
     sourced from a profile). Items missing from the common set are skipped;
     fall back to PREFERRED_ORDER → any-common if `priority` exhausts.
-    """
-    src_h = effective_supported(src)
-    dst_h = effective_supported(dst)
 
+    `allow_download` widens a *remote* side's obtainable set to the
+    download-and-hash algos — but ONLY for an explicit `override`. Auto-
+    negotiation below always uses the advertised-only view so it never picks
+    an algo that would silently download every byte (#76).
+    """
     if override:
         algo = override.lower()
+        src_h = effective_supported(src, allow_download=allow_download)
+        dst_h = effective_supported(dst, allow_download=allow_download)
         if algo not in src_h:
             raise HashNegotiationError(
                 f"src ({src}) cannot provide hash '{algo}'. "
@@ -125,6 +137,10 @@ def negotiate(
             )
         return algo
 
+    # Auto-negotiation: advertised-only for remotes (allow_download deliberately
+    # NOT propagated) so it never silently selects a download-only algorithm.
+    src_h = effective_supported(src)
+    dst_h = effective_supported(dst)
     common = src_h & dst_h
     if not common:
         raise HashNegotiationError(

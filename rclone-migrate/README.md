@@ -233,7 +233,10 @@ Common outcomes:
 To force a single algorithm: `[defaults] hash = "MD5"` or per-job
 `hash = "..."`. Forcing an algo that a backend doesn't natively expose
 will error unless you also set `download = true` (which fetches bytes to
-compute it — slow + expensive).
+compute it — slow + expensive; rmig warns before the bulk pull).
+**Auto**-negotiation never does this on its own: it only ever picks an algo
+both sides advertise natively, so it can't silently download a whole tree —
+the download path is reachable only through an explicit `hash =` override.
 
 ### Profiles — picking a different priority order
 

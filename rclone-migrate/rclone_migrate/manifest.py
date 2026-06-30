@@ -184,6 +184,13 @@ def refresh(
                  f"{sorted(hashing.supported_hashes(root))}")
         v.detail(f"  → {'native' if native else 'no native'} support for {algorithm}; "
                  f"{'no --download' if native else 'using --download'}")
+    if not native:
+        # Cost transparency (#76): obtaining a non-advertised algo means rclone
+        # downloads every byte to hash it locally. Log before the bulk pull.
+        v.warn(
+            f"[{side}] '{algorithm}' is not native to remote backend '{root}'; "
+            f"hashing it downloads every byte (can be slow / incur egress cost)."
+        )
     m = _refresh_remote(
         side, root, algorithm,
         state_conn=state_conn,
