@@ -681,6 +681,7 @@ rclone-migrate/
     ops.py           # copy / check / delete glue
     mhl.py           # ASC MHL v2.0 emitter (export-mhl)
     importer.py      # external-fixity CSV → hash_cache (import)
+    identity.py      # per-user MHL identity (identity.toml)
   templates/
     hash-cache.csv   # documented CSV template for `rmig import`
   tests/

@@ -15,6 +15,7 @@ from typing import List, Optional
 from . import __version__
 from . import audit as audit_mod
 from . import config as config_mod
+from . import identity as identity_mod
 from . import ops
 from . import profiles as profiles_mod
 from . import manifest as manifest_mod
@@ -1056,6 +1057,58 @@ def _safe_exit(fn) -> int:
         return 130
 
 
+def cmd_identity(argv: Optional[List[str]] = None) -> int:
+    p = argparse.ArgumentParser(
+        prog="rmig identity",
+        description="Inspect / initialize the per-user MHL operator identity "
+                    "(identity.toml), a fallback for [defaults] MHL fields.",
+    )
+    sub = p.add_subparsers(dest="action", required=True)
+    sub.add_parser("show", help="Print the identity file path + its values")
+    p_init = sub.add_parser(
+        "init", help="Write a starter identity.toml at the XDG path")
+    p_init.add_argument("--force", action="store_true",
+                        help="Overwrite an existing identity file")
+    args = p.parse_args(argv)
+    if args.action == "show":
+        return _identity_show()
+    if args.action == "init":
+        return _identity_init(args)
+    return 2
+
+
+def _identity_show() -> int:
+    path = identity_mod.identity_path()
+    print(f"path  {path}")
+    if not path.exists():
+        print("(no identity file — run `rmig identity init` to create one)")
+        return 0
+    try:
+        ident = identity_mod.load_identity(path)
+    except identity_mod.IdentityError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    if not ident:
+        print("(file present but no recognized identity fields)")
+        return 0
+    for k in identity_mod.IDENTITY_KEYS:
+        if k in ident:
+            print(f"{k:18} {ident[k]}")
+    return 0
+
+
+def _identity_init(args) -> int:
+    try:
+        path = identity_mod.write_starter(force=args.force)
+    except identity_mod.IdentityError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    print(f"wrote starter identity → {path}")
+    print("Edit it to set your MHL author/role/location; it then applies to "
+          "any job whose own config leaves those fields unset.")
+    return 0
+
+
 def hash_cmd() -> None:  sys.exit(_safe_exit(cmd_hash))
 def copy_cmd() -> None:  sys.exit(_safe_exit(cmd_copy))
 def check_cmd() -> None: sys.exit(_safe_exit(cmd_check))
@@ -1075,7 +1128,7 @@ def main(argv: Optional[List[str]] = None) -> None:
     if not argv or argv[0] in ("-h", "--help"):
         print(
             "usage: rmig {init|hash|copy|check|delete|list-jobs|log|"
-            "file-status|profiles|export-mhl|import} [options]\n"
+            "file-status|profiles|identity|export-mhl|import} [options]\n"
             "       rmig --version",
             file=sys.stderr,
         )
@@ -1086,6 +1139,7 @@ def main(argv: Optional[List[str]] = None) -> None:
         "delete": cmd_delete, "list-jobs": cmd_list_jobs,
         "log": cmd_log, "file-status": cmd_file_status,
         "init": cmd_init, "profiles": cmd_profiles,
+        "identity": cmd_identity,
         "export-mhl": cmd_export_mhl, "import": cmd_import,
     }
     if sub not in table:

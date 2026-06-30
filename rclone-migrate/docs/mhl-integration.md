@@ -74,14 +74,44 @@ dst, so the entire src state is re-attested.
 | Field               | Scope          | Type       | Default | Meaning                                                                |
 |---------------------|----------------|------------|---------|------------------------------------------------------------------------|
 | `emit_mhl`          | defaults / job | bool       | `false` | opt-in toggle                                                          |
-| `mhl_author`        | defaults / job | string     | unset   | git-style `"Name <email@host.dom>"` — name → element text, email → `email` attr |
-| `mhl_author_phone`  | defaults / job | string     | unset   | `<author phone="...">` — rare                                          |
-| `mhl_author_role`   | defaults / job | string     | unset   | `<author role="DIT">` — e.g. "DIT", "Editor"                           |
-| `mhl_location`      | defaults / job | string     | unset   | `<creatorinfo><location>` — e.g. "Studio A, Burbank"                   |
+| `mhl_author`        | defaults / job / identity | string | unset | git-style `"Name <email@host.dom>"` — name → element text, email → `email` attr |
+| `mhl_author_phone`  | defaults / job / identity | string | unset | `<author phone="...">` — rare                                          |
+| `mhl_author_role`   | defaults / job / identity | string | unset | `<author role="DIT">` — e.g. "DIT", "Editor"                           |
+| `mhl_location`      | defaults / job / identity | string | unset | `<creatorinfo><location>` — e.g. "Studio A, Burbank"                   |
 | `mhl_comment`       | defaults / job | string     | unset   | `<creatorinfo><comment>`                                                |
 | `mhl_sides`         | defaults / job | string list | unset   | restrict emission to a subset of {`src`, `dst`}                        |
 
 Job-level fields override defaults exactly like other config keys.
+
+### Per-user identity (`identity.toml`)
+
+The four identity fields — `mhl_author`, `mhl_author_phone`, `mhl_author_role`,
+`mhl_location` — describe the **operator**, not the job. When `rmig init`
+produces one TOML per job, repeating them in every `[defaults]` is friction
+(and rotating your email/role means editing every file). Put them once in a
+per-user file instead, the way `~/.gitconfig` sits below per-repo config:
+
+```toml
+# ${XDG_CONFIG_HOME:-~/.config}/rclone-migrate/identity.toml
+mhl_author      = "Me <me@example.com>"
+mhl_author_role = "DIT"
+mhl_location    = "Home Studio"
+```
+
+Resolution chain (highest wins):
+
+```
+[[jobs]] field  >  [defaults] field  >  identity.toml  >  unset (element omitted)
+```
+
+Only those four keys are read; anything else in the file is ignored. A
+malformed file or a non-string value errors loudly rather than silently
+dropping your name from the chain of custody.
+
+```bash
+rmig identity init    # write a starter file at the XDG path (--force to overwrite)
+rmig identity show    # print the resolved path + its values
+```
 
 ### About the `mhl_author` parser
 
