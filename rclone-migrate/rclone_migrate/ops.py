@@ -255,12 +255,22 @@ def emit_mhl_generation(
         location=job.resolved_mhl_location(cfg.defaults),
         comment=job.resolved_mhl_comment(cfg.defaults),
     )
+    # Per-file action vs the previous generation (#82): a path not seen before
+    # is `action` (caller's new-file intent, normally "original"); one whose
+    # hash matches the last generation is "verified"; a mismatch is "failed".
+    # This replaces the old uniform `action`, so a re-seal/re-check records a
+    # real verification result instead of mislabelling everything "original".
+    prev = mhl.load_latest_hashes(root_path, algorithm)
     h_entries = [
         mhl.HashEntry(
             path=e.path,
             size=e.size,
             hashes={algorithm: e.hash},
-            actions={algorithm: action},
+            actions={algorithm: (
+                action if e.path not in prev
+                else "verified" if prev[e.path] == e.hash
+                else "failed"
+            )},
         )
         for e in entries
     ]

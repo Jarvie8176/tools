@@ -26,7 +26,7 @@ import socket
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 from xml.etree import ElementTree as ET
 
 # `defusedxml` shields parse_chain from XML attacks (entity expansion,
@@ -153,7 +153,9 @@ def parse_author(s: Optional[str]) -> tuple:
     return (s, None)
 
 
-_DEFAULT_IGNORE = (".DS_Store", "ascmhl", "ascmhl/", ".rmig-cache.db")
+_DEFAULT_IGNORE = (
+    ".DS_Store", ".fseventsd", "ascmhl", "ascmhl/", ".rmig-cache.db",
+)
 
 
 @dataclass
@@ -315,6 +317,65 @@ def parse_chain(xml_bytes: bytes) -> List[ChainEntry]:
         c4 = hl.findtext(f"{{{NS_DIRECTORY}}}c4") or ""
         out.append(ChainEntry(sequencenr=seq, path=path, c4=c4))
     return sorted(out, key=lambda e: e.sequencenr)
+
+
+def parse_manifest(xml_bytes: bytes) -> List[HashEntry]:
+    """Parse one generation manifest (`NNNN_*.mhl`) into a HashEntry list.
+
+    Reads each `<hash>`'s `<path>` plus its per-algorithm digest children (and
+    their `action` attrs). defusedxml-backed — the file may have been written
+    by a third-party MHL tool sharing the `ascmhl/` directory."""
+    root = _safe_fromstring(xml_bytes)
+    hashes = root.find(f"{{{NS_MANIFEST}}}hashes")
+    if hashes is None:
+        return []
+    out: List[HashEntry] = []
+    for h in hashes.findall(f"{{{NS_MANIFEST}}}hash"):
+        path_el = h.find(f"{{{NS_MANIFEST}}}path")
+        if path_el is None or not (path_el.text or "").strip():
+            continue
+        try:
+            size = int(path_el.attrib.get("size", "0"))
+        except (TypeError, ValueError):
+            size = 0
+        hd: dict = {}
+        ad: dict = {}
+        for child in h:
+            tag = child.tag.split("}")[-1]
+            if tag in MHL_ALGORITHMS and (child.text or "").strip():
+                hd[tag] = child.text.strip().lower()
+                act = child.attrib.get("action")
+                if act:
+                    ad[tag] = act
+        if hd:
+            out.append(HashEntry(path=path_el.text, size=size,
+                                 hashes=hd, actions=ad))
+    return out
+
+
+def load_latest_hashes(root: Path, algorithm: str) -> Dict[str, str]:
+    """Return ``{path: hash}`` for `algorithm` from the most recent generation
+    manifest under ``root/ascmhl/`` (or ``{}`` if none / unreadable).
+
+    Used to decide each file's MHL ``action`` on the *next* generation:
+    a path absent here is ``original`` (new), present-and-matching is
+    ``verified``, present-and-differing is ``failed`` (#82)."""
+    d = ascmhl_dir(root)
+    if not d.is_dir():
+        return {}
+    latest_seq, latest_path = -1, None
+    for p in d.glob("*.mhl"):
+        m = re.match(r"^(\d+)_", p.name)
+        if m and int(m.group(1)) > latest_seq:
+            latest_seq, latest_path = int(m.group(1)), p
+    if latest_path is None:
+        return {}
+    try:
+        entries = parse_manifest(latest_path.read_bytes())
+    except Exception:
+        return {}
+    return {e.path: e.hashes[algorithm]
+            for e in entries if algorithm in e.hashes}
 
 
 # --- High-level write ---------------------------------------------------------

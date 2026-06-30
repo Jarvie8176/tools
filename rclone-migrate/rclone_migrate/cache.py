@@ -54,6 +54,36 @@ def is_sidecar(name: str) -> bool:
     )
 
 
+# OS / volume junk directories that must never be walked into, hashed, or
+# copied. `ascmhl` is rmig's own MHL output (regenerated, not data). The rest
+# are macOS volume metadata that appear at the root of removable media / SMB
+# shares (and leaked into the #19 chain — e.g. `.fseventsd`).
+SYSTEM_JUNK_DIRS = frozenset({
+    "ascmhl",
+    ".fseventsd",
+    ".Spotlight-V100",
+    ".Trashes",
+    ".TemporaryItems",
+    ".DocumentRevisions-V100",
+})
+
+
+def is_system_junk_file(name: str) -> bool:
+    """True for OS-generated junk files that must never be hashed/copied:
+    ``.DS_Store`` and the macOS AppleDouble companion of a junk dir or
+    ``.DS_Store`` (e.g. ``._ascmhl``, ``._.fseventsd``, ``._.DS_Store``)
+    that the OS spawns on exFAT/SMB volumes — these leaked into the #19 chain.
+
+    AppleDouble of *real media* (``._VID_0001.insv``) is deliberately NOT
+    matched: that's user-data territory (see ``is_sidecar``)."""
+    if name == ".DS_Store":
+        return True
+    if name.startswith("._"):
+        base = name[2:]
+        return base in SYSTEM_JUNK_DIRS or base == ".DS_Store"
+    return False
+
+
 @dataclass
 class CacheEntry:
     path: str       # relative to root
