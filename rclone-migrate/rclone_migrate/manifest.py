@@ -132,6 +132,43 @@ def _probe_reachable(root_path: Path, side: str,
 
 # ----------------- Refresh strategies -----------------
 
+def local_side_hashes(
+    root: str,
+    algorithm: str,
+    *,
+    local_cache_in_root: bool,
+    state_dir: Path,
+    v: Optional["verbose_mod.Verbose"] = None,
+) -> Dict[str, str]:
+    """Return ``{relpath: hash}`` for `algorithm` from a *local* side's
+    persisted cache — the same db `_refresh_local` writes.
+
+    Used to record an MHL report hash (#83) that differs from the negotiated
+    transfer/primary algo: the report algo is computed as a `multi_hash`
+    secondary during refresh, then read back here at emit time. Returns ``{}``
+    if the cache or the algorithm is absent (caller warns/skips)."""
+    if v is None:
+        v = verbose_mod.default()
+    root_path = Path(os.path.expanduser(root))
+    if not root_path.exists():
+        return {}
+    fallback_dir = state_dir / "local-cache"
+    if local_cache_in_root:
+        db_path = cache.cache_path_for_root(root_path, fallback_dir=fallback_dir)
+    else:
+        db_path, _dsid = cache.resolve_fallback_db(
+            root_path, fallback_dir, v, create=False
+        )
+    if not db_path.exists():
+        return {}
+    conn = cache.open_db(db_path)
+    try:
+        entries = cache.load_for_algorithm(conn, algorithm)
+    finally:
+        conn.close()
+    return {p: e.hash for p, e in entries.items()}
+
+
 def refresh(
     side: str,
     job: Job,

@@ -80,8 +80,30 @@ dst, so the entire src state is re-attested.
 | `mhl_location`      | defaults / job / identity | string | unset | `<creatorinfo><location>` — e.g. "Studio A, Burbank"                   |
 | `mhl_comment`       | defaults / job | string     | unset   | `<creatorinfo><comment>`                                                |
 | `mhl_sides`         | defaults / job | string list | unset   | restrict emission to a subset of {`src`, `dst`}                        |
+| `mhl_hash`          | defaults / job / profile | string | primary | algorithm recorded in the MHL report, decoupled from the transfer hash |
 
 Job-level fields override defaults exactly like other config keys.
+
+### Report hash vs transfer hash (`mhl_hash`)
+
+The hash rmig uses to **verify a transfer** and the hash it **records in the MHL
+report** don't have to be the same algorithm. Set `mhl_hash` (per-job,
+`[defaults]`, or a profile) to record a specific algorithm in the MHL while the
+copy/check keep using the negotiated primary for on-the-wire integrity.
+
+The bundled **`dit`** profile sets `mhl_hash = "xxh64"`: transfers verify with
+`xxh128` (fast, local, native) while the MHL records **`xxh64`** — the only
+fully-stable xxHash variant (XXH3/XXH128 changed digests before xxHash v0.8.0)
+and the create-default of every dominant DIT tool (Silverstack, MediaVerify,
+OffShoot, YoYotta), so a fresh chain is continuable everywhere. An `xxh3`/`xxh128`
+seal is silently non-continuable in YoYotta and OffShoot.
+
+The report algorithm is computed once alongside the primary (single read), so
+`rmig hash` records it directly. `copy`/`check` don't compute the secondary; if
+it isn't cached they fall back to recording the primary (when that is itself
+MHL-valid) — run `rmig hash` for the canonical `xxh64` seal. rmig's `xxh64`
+digest is the canonical **big-endian** (`xxHash64BE`) value, matching `xxhsum`
+and the GUI tools.
 
 ### Per-user identity (`identity.toml`)
 

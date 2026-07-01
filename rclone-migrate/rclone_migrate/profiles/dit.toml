@@ -1,9 +1,15 @@
-description = "DIT / film / video post; MHL v2.0-aligned; integrity-first (XXH3-128 archival)."
+description = "DIT / film / video post; MHL v2.0-aligned. Transfer/integrity = XXH3-128 (local, fast); MHL report = XXH64 (stable, cross-tool)."
 priority = [
     "xxh128", "xxh3", "xxh64",
     "sha1", "md5", "c4",
 ]
+# ASC MHL report hash, decoupled from the transfer primary (#83). XXH64 is the
+# only fully-stable xxHash variant (XXH3/128 changed digests before xxHash
+# v0.8.0) and is the create-default of every dominant DIT tool (Silverstack,
+# MediaVerify, OffShoot, YoYotta) — so a fresh chain is continuable everywhere.
+# XXH3/128 seals are silently non-continuable in YoYotta/OffShoot.
+mhl_hash = "xxh64"
 warnings = [
     "xxh3/xxh64/xxh128 are non-cryptographic. For jobs with > 1M files, accidental collision probability becomes non-negligible — switch to sha1 or sha256 at that scale.",
-    "xxh128 (XXH3-128) is preferred over xxh3 (XXH3-64): the 128-bit digest keeps birthday-collision headroom safe as a mixed photo/video archive grows; per-file speed cost over XXH3-64 is negligible (both > 10 GB/s). Override with --hash xxh3 for speed-first single-pass.",
+    "Transfer uses xxh128 (XXH3-128) for local integrity; the MHL report records xxh64 (mhl_hash) for cross-tool interop. Both are computed in one read. Override the report with mhl_hash if a tool standardizes on xxh3/xxh128.",
 ]

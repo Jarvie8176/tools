@@ -238,14 +238,41 @@ def emit_mhl_generation(
             f"(MHL output supports local sides only in this version)"
         )
         return None
-    if algorithm not in mhl.MHL_ALGORITHMS:
+    # #83: the MHL report algorithm is decoupled from the negotiated transfer
+    # algo. When `mhl_hash` is configured (e.g. "xxh64" — the stable, GUI-tool-
+    # interoperable default), record THAT (read from the side's cache, where it
+    # was computed as a multi_hash secondary); otherwise record the primary.
+    report_algo = cfg.resolve_mhl_hash(job) or algorithm
+    root_path = Path(os.path.expanduser(root))
+    # Per-path report hash: from the passed entries when it IS the primary, else
+    # loaded from the local side's cache (computed there as a multi_hash algo).
+    if report_algo == algorithm:
+        report_hashes = {e.path: e.hash for e in entries}
+    else:
+        report_hashes = manifest.local_side_hashes(
+            root, report_algo,
+            local_cache_in_root=job.resolved_local_cache_in_root(cfg.defaults),
+            state_dir=cfg.state_dir_for(job), v=v,
+        )
+        # Fallback: an op that didn't compute the report algo (e.g. copy/check,
+        # which don't add it to their refresh) has none cached — record the
+        # primary instead when it is itself MHL-valid. `rmig hash` auto-computes
+        # the report algo, so the canonical seal still gets it.
+        if (not any(e.path in report_hashes for e in entries)
+                and algorithm in mhl.MHL_ALGORITHMS):
+            v.detail(
+                f"  [mhl] '{report_algo}' not cached for this op; recording "
+                f"primary '{algorithm}'"
+            )
+            report_algo = algorithm
+            report_hashes = {e.path: e.hash for e in entries}
+    if report_algo not in mhl.MHL_ALGORITHMS:
         v.warn(
-            f"  [mhl] negotiated algo '{algorithm}' is not in MHL v2.0 set; "
-            f"skipping emit. Pick an MHL-aligned profile (e.g. 'dit') "
-            f"or include sha1/md5 in your priority."
+            f"  [mhl] report algo '{report_algo}' is not in the MHL v2.0 set; "
+            f"skipping emit. Set mhl_hash to an MHL algo (e.g. xxh64) or pick "
+            f"an MHL-aligned profile."
         )
         return None
-    root_path = Path(os.path.expanduser(root))
     name, email = mhl.parse_author(job.resolved_mhl_author(cfg.defaults))
     creator = mhl.CreatorInfo.default(
         author_name=name,
@@ -255,25 +282,36 @@ def emit_mhl_generation(
         location=job.resolved_mhl_location(cfg.defaults),
         comment=job.resolved_mhl_comment(cfg.defaults),
     )
-    # Per-file action vs the previous generation (#82): a path not seen before
-    # is `action` (caller's new-file intent, normally "original"); one whose
-    # hash matches the last generation is "verified"; a mismatch is "failed".
-    # This replaces the old uniform `action`, so a re-seal/re-check records a
-    # real verification result instead of mislabelling everything "original".
-    prev = mhl.load_latest_hashes(root_path, algorithm)
-    h_entries = [
-        mhl.HashEntry(
+    # Per-file action vs the previous generation (#82), compared on the report
+    # algo: new → caller's `action`; hash matches prior → "verified"; differs →
+    # "failed" — so a re-seal/re-check records a real verification result.
+    prev = mhl.load_latest_hashes(root_path, report_algo)
+    h_entries = []
+    missing = 0
+    for e in entries:
+        rh = report_hashes.get(e.path)
+        if rh is None:
+            missing += 1
+            continue
+        h_entries.append(mhl.HashEntry(
             path=e.path,
             size=e.size,
-            hashes={algorithm: e.hash},
-            actions={algorithm: (
+            hashes={report_algo: rh},
+            actions={report_algo: (
                 action if e.path not in prev
-                else "verified" if prev[e.path] == e.hash
+                else "verified" if prev[e.path] == rh
                 else "failed"
             )},
+        ))
+    if missing:
+        v.warn(
+            f"  [mhl] {side}: {missing} file(s) have no '{report_algo}' hash "
+            f"cached — not recorded. Ensure it is computed (profile multi_hash, "
+            f"or `rmig hash` which auto-adds mhl_hash)."
         )
-        for e in entries
-    ]
+    if not h_entries:
+        v.warn(f"  [mhl] {side}: no files carry '{report_algo}'; skipping emit")
+        return None
     gen = mhl.Generation(
         sequencenr=mhl.next_sequencenr(root_path),
         process=process,

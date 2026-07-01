@@ -93,6 +93,9 @@ class Defaults:
     mhl_location: Optional[str] = None      # physical location, e.g. "Studio A"
     mhl_comment: Optional[str] = None
     mhl_sides: Optional[List[str]] = None  # None → smart default by op
+    # Algorithm recorded in the ASC MHL report, decoupled from the negotiated
+    # transfer/primary algo (#83). None → emit the primary. See Profile.mhl_hash.
+    mhl_hash: Optional[str] = None
     # After a successful copy, drop a CSV manifest of the *src view*
     # into dst so a dst-side inspector can answer "what did src look
     # like at copy time?" without re-mounting src. Surfaces the rows
@@ -130,6 +133,7 @@ class Job:
     mhl_location: Optional[str] = None
     mhl_comment: Optional[str] = None
     mhl_sides: Optional[List[str]] = None
+    mhl_hash: Optional[str] = None
     emit_src_manifest: Optional[bool] = None
 
     def resolved_hash(self, defaults: Defaults) -> Optional[str]:
@@ -239,7 +243,10 @@ class Config:
                 inline=self.inline_profiles or None,
             )
             priority = list(prof.priority)
-        if job.resolved_emit_mhl(self.defaults):
+        # Force an MHL-emittable primary ONLY when the report has no separate
+        # algo (#83). With mhl_hash set, the transfer primary is decoupled from
+        # the MHL report and may be any algo (e.g. sha256 for cloud coverage).
+        if job.resolved_emit_mhl(self.defaults) and not self.resolve_mhl_hash(job):
             from . import mhl
             filtered = [a for a in priority if a in mhl.MHL_ALGORITHMS]
             if not filtered:
@@ -252,6 +259,16 @@ class Config:
                 )
             priority = filtered
         return priority
+
+    def resolve_mhl_hash(self, job: Job) -> Optional[str]:
+        """Algorithm to record in the ASC MHL report (#83), decoupled from the
+        negotiated transfer algo. Resolution: job > [defaults] > profile.mhl_hash.
+        None → emit the primary (legacy). Returned lowercase."""
+        raw = job.mhl_hash or self.defaults.mhl_hash
+        if raw is None:
+            prof = self.resolve_profile(job)
+            raw = prof.mhl_hash if prof else None
+        return raw.strip().lower() if raw else None
 
     def resolve_profile(self, job: Job) -> Optional[profiles_mod.Profile]:
         """Return the named profile object for `job` (None if hash_priority
@@ -303,6 +320,7 @@ def load(path: str | Path) -> Config:
         mhl_sides=_as_str_list(
             d.get("mhl_sides"), "mhl_sides", "[defaults]",
         ),
+        mhl_hash=d.get("mhl_hash"),
         emit_src_manifest=bool(
             d.get("emit_src_manifest", Defaults.emit_src_manifest)
         ),
@@ -343,6 +361,7 @@ def load(path: str | Path) -> Config:
                 mhl_author_phone=jr.get("mhl_author_phone"),
                 mhl_author_role=jr.get("mhl_author_role"),
                 mhl_location=jr.get("mhl_location"),
+                mhl_hash=jr.get("mhl_hash"),
                 mhl_comment=jr.get("mhl_comment"),
                 mhl_sides=_as_str_list(
                     jr.get("mhl_sides"), "mhl_sides", ctx,
