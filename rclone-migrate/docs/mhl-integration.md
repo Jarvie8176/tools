@@ -172,6 +172,23 @@ Each generation is one XML file per side. Structure (full example):
 </hashlist>
 ```
 
+### Action semantics
+
+Each hash's `action` attribute is computed against the **previous generation**
+for that side (read from the latest `ascmhl/NNNN_*.mhl`):
+
+| action | meaning |
+|--------|---------|
+| `original` | file not present in the prior generation (first time it's recorded) |
+| `verified` | present before and the hash **matches** the prior record |
+| `failed`   | present before but the hash **differs** — a content/integrity change |
+
+So a re-seal/re-check generation reflects a real verification result rather
+than re-stamping every file `original`. The first generation (no prior) records
+everything as `original`. The `<ignore>` patterns list the OS/tool artifacts
+(`.DS_Store`, `.fseventsd`, `ascmhl`, `.rmig-cache.db`) that rmig also skips
+during its own walk so they never enter the manifest.
+
 Plus one `ascmhl_chain.xml` per side, listing each generation's filename
 and the C4 ID of the manifest bytes (tamper-evidence across the chain):
 

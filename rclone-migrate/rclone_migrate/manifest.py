@@ -265,13 +265,15 @@ def _refresh_local(
         v.info(f"[{side}] scanning {root} …")  # walk can be slow over SMB
     current: Dict[str, Tuple[int, float]] = {}
     for dirpath, dirnames, filenames in os.walk(root_path):
-        # Prune ascmhl/ at any depth (matches MHL spec's default ignore).
-        dirnames[:] = [d for d in dirnames if d != "ascmhl"]
+        # Prune ascmhl/ + OS volume junk dirs (.fseventsd, .Spotlight-V100, …)
+        # at any depth so they never get hashed or pollute the manifest (#82).
+        dirnames[:] = [d for d in dirnames if d not in cache.SYSTEM_JUNK_DIRS]
         for fn in filenames:
             # Exclude rmig's own root sidecars. The dataset marker in
             # particular holds a *different* id on src vs dst — including
             # it would make the two manifests never match.
-            if cache.is_sidecar(fn):
+            # Also exclude OS junk files (.DS_Store, ._ascmhl AppleDouble, …).
+            if cache.is_sidecar(fn) or cache.is_system_junk_file(fn):
                 continue
             # Exclude rclone's in-flight/leftover temp files. A `.partial`
             # is an incomplete copy (often huge), never real data — hashing
