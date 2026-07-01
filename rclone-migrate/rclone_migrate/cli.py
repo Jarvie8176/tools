@@ -961,6 +961,8 @@ def _profiles_show(args) -> int:
     print(f"priority    {prof.priority}")
     if prof.multi_hash:
         print(f"multi_hash  {prof.multi_hash}")
+    if prof.mhl_hash:
+        print(f"mhl_hash    {prof.mhl_hash}")
     if prof.warnings:
         print("warnings:")
         for w in prof.warnings:
