@@ -132,6 +132,9 @@ def _clear_immutable(path: str) -> None:
     try:
         os.chflags(path, 0)  # macOS/BSD; AttributeError on Linux
     except (AttributeError, OSError):
+        # Intentional no-op: this is best-effort. On Linux os.chflags doesn't
+        # exist (AttributeError); a real chflags failure (OSError) is left for
+        # the caller's subsequent os.remove to surface as the actionable error.
         pass
 
 
