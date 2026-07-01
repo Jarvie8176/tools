@@ -43,6 +43,14 @@ def test_version_top_level(capsys):
     assert __version__ in out
 
 
+def test_profiles_show_displays_mhl_hash(capsys):
+    """`rmig profiles show dit` surfaces the mhl_hash field (#83)."""
+    rc = cli.cmd_profiles(["show", "dit"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "mhl_hash" in out and "xxh64" in out
+
+
 def test_list_jobs(tmp_path: Path, capsys):
     cfg_path = tmp_path / "c.toml"
     _write_config(cfg_path)
