@@ -188,6 +188,37 @@ jobs:
       - name: Run bats tests
         run: bats --tap tests/
 
+  # macOS-specific coverage on a self-hosted mac runner (saves GitHub-hosted
+  # mac minutes). Exercises the UF_IMMUTABLE / `uchg` tests (#54) that are
+  # skipped on Linux. Deliberately NOT in `ci-pass` needs below — a self-hosted
+  # mac may be offline, and an informational lane must not wedge PRs. Requires a
+  # runner registered with the `macOS` label (a1989 / a3426).
+  rclone-migrate-macos:
+    name: rclone-migrate (macOS self-hosted)
+    needs: changes
+    if: needs.changes.outputs.rclone-migrate == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: [self-hosted, macOS]
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: rclone-migrate
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Toolchain (system python3 + rclone)
+        run: |
+          python3 --version
+          command -v rclone >/dev/null || brew install rclone
+          rclone version
+      - name: Install (isolated venv)
+        run: |
+          python3 -m venv .venv
+          .venv/bin/pip install --quiet --upgrade pip
+          .venv/bin/pip install --quiet -e ".[dev]"
+      - name: Test (incl. macOS-only UF_IMMUTABLE tests)
+        run: .venv/bin/pytest -v
+
   ci-pass:
     name: CI pass
     if: always()
