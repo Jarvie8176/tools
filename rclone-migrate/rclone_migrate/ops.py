@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import os
 import sqlite3
+import stat
 import threading
 import time
 from dataclasses import dataclass
@@ -111,6 +112,29 @@ def _select_engine(to_copy, job, cfg, use_rsync: bool, v) -> dict:
     return eng
 
 
+def _is_immutable(path: str) -> bool:
+    """True if `path` carries UF_IMMUTABLE (macOS `uchg`), which the camera
+    "Protect" function / the FAT DOS read-only bit set on it and macOS's exFAT
+    driver surfaces via ``stat(2).st_flags`` (#54).
+
+    Always False on platforms without ``st_flags`` (Linux) — a safe no-op, so
+    callers can invoke it unconditionally."""
+    try:
+        flags = os.stat(path).st_flags  # BSD/macOS only
+    except (AttributeError, OSError):
+        return False
+    return bool(flags & stat.UF_IMMUTABLE)
+
+
+def _clear_immutable(path: str) -> None:
+    """Best-effort clear of BSD flags so `path` can be removed. No-op on Linux
+    (no ``os.chflags``); swallows errors — the caller's remove reports failure."""
+    try:
+        os.chflags(path, 0)  # macOS/BSD; AttributeError on Linux
+    except (AttributeError, OSError):
+        pass
+
+
 def _clean_stale_partials(job: Job, to_copy, v) -> int:
     """Stage G: remove `.partial` temp files left by a previously
     interrupted run for the files we're about to (re)copy.
@@ -145,6 +169,10 @@ def _clean_stale_partials(job: Job, to_copy, v) -> int:
             if any(n == b + ".partial" or n.startswith(b + ".")
                    for b in bases):
                 try:
+                    # #54: a stale `.partial` may carry `uchg` (propagated from a
+                    # protected src, or a Finder Lock) — clear BSD flags first or
+                    # the unlink fails EPERM and wedges the run. No-op on Linux.
+                    _clear_immutable(e.path)
                     os.remove(e.path)
                     removed += 1
                     v.detail(f"  [copy] removed stale partial: {n}")
@@ -434,6 +462,28 @@ def do_copy(
         ev.set_algo(algo)
 
         plan = plan_copy(src_mf, dst_mf)
+        # #54: drop src files carrying UF_IMMUTABLE (`uchg` — camera Protect /
+        # FAT read-only). rclone propagates the flag to the dst `.partial`, then
+        # the `.partial → final` rename fails EPERM (errno -1) and the file is
+        # uncopyable. Don't auto-strip — Protect is an explicit user signal;
+        # warn + skip so the rest of the copy proceeds. Skipped files stay
+        # 'missing' at dst → a later `check` fails → `delete` stays blocked.
+        if rclone.is_local(job.src) and plan.to_copy:
+            immutable = [e for e in plan.to_copy
+                         if _is_immutable(_join(job.src, e.path))]
+            if immutable:
+                skipped = {e.path for e in immutable}
+                plan.to_copy = [e for e in plan.to_copy
+                                if e.path not in skipped]
+                v.warn(
+                    f"[copy] skipping {len(immutable)} immutable (uchg) src "
+                    f"file(s) — rclone can't rename their .partial (EPERM). "
+                    f"Clear with `chflags nouchg <files>` then re-run."
+                )
+                for pth in sorted(skipped)[:10]:
+                    v.detail(f"    uchg (skipped): {pth}")
+                if len(skipped) > 10:
+                    v.detail(f"    ... and {len(skipped) - 10} more")
         ev.set_counts(src=plan.src_total, dst=plan.dst_total)
         if progress:
             v.info(
