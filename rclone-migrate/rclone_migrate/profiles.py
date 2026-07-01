@@ -46,6 +46,11 @@ class Profile:
     priority: List[str]
     description: str = ""
     multi_hash: List[str] = field(default_factory=list)
+    # Algorithm to record in the ASC MHL report, independent of the negotiated
+    # transfer/primary algo (#83). None → emit the primary (legacy behavior).
+    # Must be an MHL v2.0 algo (checked at emit); recommended: "xxh64" (the
+    # only fully-stable xxHash variant + every GUI tool's interop default).
+    mhl_hash: Optional[str] = None
     warnings: List[str] = field(default_factory=list)
     source: str = "<unknown>"
 
@@ -104,6 +109,20 @@ def _validate(name: str, raw: dict, source: str) -> Profile:
             )
         multi_hash.append(an)
 
+    mhl_hash_raw = raw.get("mhl_hash")
+    mhl_hash: Optional[str] = None
+    if mhl_hash_raw is not None:
+        if not isinstance(mhl_hash_raw, str):
+            raise ProfileError(
+                f"profile '{name}' from {source}: 'mhl_hash' must be a string"
+            )
+        mhl_hash = mhl_hash_raw.strip().lower()
+        if mhl_hash not in KNOWN_ALGORITHMS:
+            raise ProfileError(
+                f"profile '{name}' from {source}: unknown algorithm "
+                f"'{mhl_hash_raw}' in mhl_hash"
+            )
+
     desc = raw.get("description", "")
     if not isinstance(desc, str):
         raise ProfileError(
@@ -124,6 +143,7 @@ def _validate(name: str, raw: dict, source: str) -> Profile:
         priority=priority,
         description=desc,
         multi_hash=multi_hash,
+        mhl_hash=mhl_hash,
         warnings=list(warnings_raw),
         source=source,
     )

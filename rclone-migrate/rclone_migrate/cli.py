@@ -141,6 +141,13 @@ def cmd_hash(argv: Optional[List[str]] = None) -> int:
         # override decides (no profile) → no extras.
         prof = cfg.resolve_profile(job)
         extra_algos = [a for a in (prof.multi_hash if prof else []) if a != algo]
+        # #83: when the MHL report uses a different algo than the transfer
+        # primary (e.g. transfer=xxh128, report=xxh64), compute it here so
+        # emit_mhl_generation can read it back from the cache.
+        mhl_hash = cfg.resolve_mhl_hash(job)
+        if (mhl_hash and mhl_hash != algo and mhl_hash not in extra_algos
+                and job.resolved_emit_mhl(cfg.defaults)):
+            extra_algos.append(mhl_hash)
         if extra_algos and progress:
             print(f"multi_hash: also recording {extra_algos} alongside {algo}")
         total = 0
@@ -729,16 +736,20 @@ def cmd_export_mhl(argv: Optional[List[str]] = None) -> int:
         )
         algo = negotiate_algo(job, cfg)
         ev.set_algo(algo)
-        if algo not in __import__(
+        # #83: the MHL report algo (mhl_hash, e.g. xxh64) is what must be
+        # MHL-valid — not the transfer primary. Compute it as a secondary.
+        report_algo = cfg.resolve_mhl_hash(job) or algo
+        if report_algo not in __import__(
             "rclone_migrate.mhl", fromlist=["MHL_ALGORITHMS"]
         ).MHL_ALGORITHMS:
             v.error(
-                f"negotiated algo '{algo}' is not in MHL v2.0 set. "
-                f"Set emit_mhl=true (which forces an MHL-compatible profile) "
-                f"or pick a profile like 'dit'."
+                f"MHL report algo '{report_algo}' is not in the MHL v2.0 set. "
+                f"Set mhl_hash to an MHL algo (e.g. xxh64) or pick a profile "
+                f"like 'dit'."
             )
             ev.set_result("fail")
             return 2
+        report_extra = [report_algo] if report_algo != algo else []
 
         sides = ("src", "dst") if args.side == "both" else (args.side,)
         emitted = 0
@@ -750,6 +761,7 @@ def cmd_export_mhl(argv: Optional[List[str]] = None) -> int:
                 download=job.resolved_download(cfg.defaults),
                 full=args.full,
                 local_cache_in_root=job.resolved_local_cache_in_root(cfg.defaults),
+                extra_algos=report_extra,
                 progress=progress, v=v,
             )
             conn.close()
