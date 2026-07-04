@@ -42,13 +42,17 @@ def _handler(cache: _Cache):
         protocol_version = "HTTP/1.1"
 
         def do_GET(self):  # noqa: N802 (stdlib API name)
+            # Route on the path so the dashboard isn't served for every URL (a bare handler
+            # returned the full page for /favicon.ico, /anything, etc). This is also the seam
+            # for future /api + /metrics endpoints.
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
             try:
-                body = cache.get(time.time())
-                self.send_response(200)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Length", str(len(body)))
-                self.end_headers()
-                self.wfile.write(body)
+                if path in ("/", "/index.html"):
+                    self._ok(cache.get(time.time()))
+                elif path == "/favicon.ico":
+                    self._empty()  # 204; the page also inlines a data-URI icon to avoid the request
+                else:
+                    self._notfound()
             except (BrokenPipeError, ConnectionResetError):
                 pass  # client went away mid-write — normal, not an error
             except Exception:
@@ -57,6 +61,26 @@ def _handler(cache: _Cache):
                     self._fail()
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # client already gone while sending the error page — nothing to do
+
+        def _ok(self, body: bytes):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _empty(self):
+            self.send_response(204)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        def _notfound(self):
+            msg = b"cc-monitor: not found"
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(msg)))
+            self.end_headers()
+            self.wfile.write(msg)
 
         def _fail(self):
             msg = b"cc-monitor: internal error (see server log)"  # never echo the exception
