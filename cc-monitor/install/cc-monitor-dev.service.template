@@ -1,0 +1,25 @@
+# systemd --user unit for the cc-monitor DEV/staging instance (rendered by install/deploy-dev.sh).
+# Previews the current checkout (editable venv) at a separate port + isolated config, alongside the
+# prod instance. Same read-only posture + co-tenancy guardrails as prod (see cc-monitor.service.template).
+[Unit]
+Description=cc-monitor-dev — Claude Code session dashboard (dev/staging)
+After=network.target
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Dev-isolated runtime config so staging edits never clobber the prod instance's config.
+Environment=CC_MONITOR_CONFIG=__CONFIG__
+ExecStart=__BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
+Restart=on-failure
+RestartSec=5
+# Pin 0644 for the textfile metrics file so node-exporter (runs as `nobody`) can read it — a
+# --user session's ambient umask can be 0002 (→ 0664). See cc-monitor.service.template.
+UMask=0022
+MemoryHigh=256M
+MemoryMax=512M
+Nice=10
+
+[Install]
+WantedBy=default.target

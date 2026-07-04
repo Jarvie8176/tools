@@ -4,8 +4,12 @@ from __future__ import annotations
 import html as _html
 import time
 
+from . import config, privacy
 from .collect import title_of
 
+# Colour thresholds (ctx_warn/crit_pct) and truncation caps (title/prompt_trunc_text/html) are
+# runtime-configurable — see cc_monitor.config. Read live at render time so a UI/API edit applies
+# on the next refresh.
 
 # Strip C0/C1 control chars + DEL so a session's prompt can't inject ANSI escapes (terminal-title
 # / clear-screen / colour) into the `once`/`html` output that an operator views in a terminal.
@@ -41,14 +45,18 @@ def _ts(epoch: float) -> str:
 
 
 def render_text(d: dict) -> str:
+    cfg = config.load()
     prom = d["prom"]
     lines = ["=" * 92, f" cc-monitor   {_ts(d['ts'])}", "=" * 92]
-    rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
-    lines.append(
-        f" cc-session RC: {rc:10s} auth:{'ok' if prom.get('auth_healthy') == '1' else '?':4s} "
-        f"workers(scraped):{prom.get('workers', '?')}/{prom.get('capacity', '?')}  "
-        f"registry_sessions:{len(d['rows'])}"
-    )
+    if d.get("cc_session"):  # optional enrichment — only when the supervisor is on THIS host
+        rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
+        lines.append(
+            f" cc-session RC: {rc:10s} auth:{'ok' if prom.get('auth_healthy') == '1' else '?':4s} "
+            f"workers(scraped):{prom.get('workers', '?')}/{prom.get('capacity', '?')}  "
+            f"registry_sessions:{len(d['rows'])}"
+        )
+    else:  # standalone: no cc-session here — show the registry count, not a misleading "RC DOWN"
+        lines.append(f" registry_sessions:{len(d['rows'])}   (standalone — no cc-session supervisor)")
     lines.append("-" * 92)
     lines.append(
         f" {'ST':2s} {'UUID8':8s} {'NAME':6s} {'MODEL':11s} {'CONTEXT':>14s} "
@@ -61,17 +69,21 @@ def render_text(d: dict) -> str:
         bar = "#" * min(int(pct / 10), 10) + "." * (10 - min(int(pct / 10), 10))
         ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{'' if certain else '?'}"
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
-        mark = "●" if r["status"] == "busy" else "○"
+        mark = "⚠" if r["status"] == "orphaned" else "●" if r["status"] == "busy" else "○"
+        redact_on = cfg["redact_default"]
         title, _src = title_of(r)
-        title = trunc(title, 22) if title else "—"
+        title = privacy.redact(title, redact_on)
+        title = trunc(title, cfg["title_trunc_text"]) if title else "—"
+        lastp = trunc(privacy.redact(r["last_prompt"], redact_on), cfg["prompt_trunc_text"]) or "—"
         lines.append(
             f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {short_model(r['model']):11s} "
             f"{ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
-            f"{title:22s} {trunc(r['last_prompt'], 40) or '—'}"
+            f"{title:22s} {lastp}"
         )
     lines.append("-" * 150)
     lines.append(
-        " ● busy / ○ idle (registry status; env workers via mtime).  TITLE = custom-title"
+        " ● busy / ○ idle (registry status; env workers via mtime) / ⚠ orphaned (present, not reachable)."
+        "  TITLE = custom-title"
         " or manual override; '—' = env-spawned GUI session, real title cloud-side."
     )
     lines.append(
@@ -81,16 +93,19 @@ def render_text(d: dict) -> str:
     return "\n".join(lines)
 
 
-def _row_html(r: dict) -> str:
+def _row_html(r: dict, cfg: dict | None = None) -> str:
+    cfg = cfg or config.load()
     win, certain = r["win"], r["win_certain"]
     pct = 100 * r["ctx"] / win if win else 0
     winlbl = f"{fmt_k(win)}{'' if certain else '?'}"
-    color = "#e5534b" if pct > 80 else "#d9a441" if pct > 50 else "#3fb950"
-    stat_c = "#3fb950" if r["status"] == "busy" else "#8b949e"
+    color = "#e5534b" if pct > cfg["ctx_crit_pct"] else "#d9a441" if pct > cfg["ctx_warn_pct"] else "#3fb950"
+    stat_c = "#e5534b" if r["status"] == "orphaned" else "#3fb950" if r["status"] == "busy" else "#8b949e"
     cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
+    redact_on = cfg["redact_default"]
     title, src = title_of(r)
-    title_html = _html.escape(trunc(title, 48)) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
-    lastp = _html.escape(trunc(r["last_prompt"], 70)) or "—"
+    title = privacy.redact(title, redact_on)
+    title_html = _html.escape(trunc(title, cfg["title_trunc_html"])) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
+    lastp = _html.escape(trunc(privacy.redact(r["last_prompt"], redact_on), cfg["prompt_trunc_html"])) or "—"
     # every dynamic field is control-char-stripped then escaped — name/model/bridge come from
     # registry/transcript (semi-trusted)
     name = _html.escape(_clean(str(r["name"])))
@@ -110,9 +125,19 @@ def _row_html(r: dict) -> str:
 
 
 def render_html(d: dict, refresh: int = 3) -> str:
+    cfg = config.load()
     prom = d["prom"]
-    rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
-    rows = "".join(_row_html(r) for r in d["rows"])
+    n = len(d["rows"])
+    if d.get("cc_session"):  # optional enrichment — only when the supervisor is on THIS host
+        rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
+        header = (
+            f"cc-session RC: <b>{rc}</b> &middot; auth: <b>{'ok' if prom.get('auth_healthy') == '1' else '?'}</b>"
+            f" &middot; workers(scraped): <b>{prom.get('workers', '?')}/{prom.get('capacity', '?')}</b>"
+            f" &middot; registry sessions: <b>{n}</b>"
+        )
+    else:  # standalone: no cc-session here — don't imply a broken RC
+        header = f"registry sessions: <b>{n}</b> &middot; <span style='opacity:.6'>standalone (no cc-session supervisor)</span>"
+    rows = "".join(_row_html(r, cfg) for r in d["rows"])
     return f"""<!doctype html><meta charset=utf-8>
 <meta http-equiv=refresh content={refresh}>
 <link rel=icon href="data:,">
@@ -127,16 +152,14 @@ def render_html(d: dict, refresh: int = 3) -> str:
  .bar{{height:8px;border-radius:4px}}
 </style>
 <h1>cc-monitor &nbsp;<span class=small>{_ts(d['ts'])} &middot; auto-refresh {refresh}s</span></h1>
-<div class=small>cc-session RC: <b>{rc}</b> &middot; auth: <b>{'ok' if prom.get('auth_healthy') == '1' else '?'}</b>
- &middot; workers(scraped): <b>{prom.get('workers', '?')}/{prom.get('capacity', '?')}</b>
- &middot; registry sessions: <b>{len(d['rows'])}</b></div>
+<div class=small>{header}</div>
 <table>
 <tr><th>status</th><th>uuid8</th><th>name</th><th>title</th><th>last-prompt</th><th>model</th>
     <th>context (input-side, #27361-safe)</th><th>cum in/out</th><th>idle</th><th>bridge (cloud)</th></tr>
 {rows}
 </table>
 <div class=small style='margin-top:10px'>
- ● busy / ○ idle = registry status (env workers via mtime) &nbsp;|&nbsp;
+ ● busy / ○ idle = registry status (env workers via mtime) / ⚠ orphaned = present but not reachable &nbsp;|&nbsp;
  title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  window = worker environ [1m] rule + peak lower-bound; "?" = env unreadable</div>
 """

@@ -22,14 +22,14 @@ class FakeClaude:
             os.makedirs(d, exist_ok=True)
         self.titles_file = os.path.join(root, "titles.json")
 
-    def proc_alive(self, pid, env: dict | None = None, starttime="12345"):
+    def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
         d = os.path.join(self.proc, str(pid))
         os.makedirs(d, exist_ok=True)
         blob = b"".join(f"{k}={v}".encode() + b"\0" for k, v in (env or {}).items())
         with open(os.path.join(d, "environ"), "wb") as fh:
             fh.write(blob)
-        # /proc/<pid>/stat: field 22 (starttime) is index 19 after "(comm)"
-        tail = ["S"] + ["0"] * 18 + [str(starttime)] + ["0"] * 5
+        # /proc/<pid>/stat: field 3 (state) is index 0 after "(comm)"; field 22 (starttime) index 19
+        tail = [state] + ["0"] * 18 + [str(starttime)] + ["0"] * 5
         with open(os.path.join(d, "stat"), "w") as fh:
             fh.write(f"{pid} (claude) " + " ".join(tail))
 

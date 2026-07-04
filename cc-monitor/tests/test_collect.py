@@ -97,10 +97,10 @@ def test_transcript_race_does_not_crash_collect(claude):
 
 def test_status_no_timestamp_trusts_registry():
     # regression: a busy status with no statusUpdatedAt (status_ts=0) must NOT be downgraded to idle
-    assert collect._status("busy", 0, 1000.0, 5000) == "busy"
-    assert collect._status("idle", 0, 1000.0, 1) == "idle"
+    assert collect._status("busy", 0, 1000.0, 5000, 12) == "busy"
+    assert collect._status("idle", 0, 1000.0, 1, 12) == "idle"
     # a stale idle (timestamp older than activity) still falls through to the activity heuristic
-    assert collect._status("idle", 1.0, 1000.0, 1) == "busy"
+    assert collect._status("idle", 1.0, 1000.0, 1, 12) == "busy"
 
 
 def test_parse_cache_reuses_unchanged_transcript(claude, monkeypatch):
@@ -133,3 +133,35 @@ def test_render_escapes_xss_in_name_model_bridge(claude):
     assert "<script>x</script>" not in html
     assert "&lt;script&gt;" in html
     assert "<img>" not in html  # model escaped too
+
+
+def test_busy_idle_gap_env_override(monkeypatch, tmp_path):
+    # BUSY_IDLE_GAP now lives in config; the env var is the ops escape hatch (highest precedence).
+    from cc_monitor import config
+    cfgfile = str(tmp_path / "cfg.json")
+    monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "45")
+    config._cache[0] = None
+    assert config.load(cfgfile)["busy_idle_gap"] == 45
+    monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "not-a-number")
+    config._cache[0] = None
+    assert config.load(cfgfile)["busy_idle_gap"] == 12  # invalid -> default
+
+
+def test_proc_liveness_classifies_gone_orphaned_alive(claude):
+    claude.proc_alive(500, starttime="900", state="S")   # normal
+    claude.proc_alive(501, starttime="900", state="Z")   # defunct
+    assert collect._proc_liveness(500, "900") == "alive"
+    assert collect._proc_liveness(501, "900") == "orphaned"
+    assert collect._proc_liveness(500, "999") == "gone"   # procStart mismatch = PID reuse
+    assert collect._proc_liveness(99999, None) == "gone"  # no such process
+
+
+def test_orphaned_session_shown_as_orphaned_not_idle(claude):
+    # a defunct worker: /proc still lists it (starttime matches) but state is Z. Its transcript
+    # went silent, so the mtime heuristic would say "idle" — it must show "orphaned" instead.
+    claude.registry(600, "zsid", "/home/x/p", name="cc-z", procstart="42")
+    claude.proc_alive(600, starttime="42", state="Z")
+    claude.transcript("zsid", "/home/x/p", [assistant("claude-opus-4-8", inp=1000)])
+    rows = collect.collect()["rows"]
+    z = [r for r in rows if r["session_id"] == "zsid"]
+    assert len(z) == 1 and z[0]["status"] == "orphaned"  # surfaced, not filtered, not "idle"
