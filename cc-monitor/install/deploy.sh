@@ -20,7 +20,10 @@ REFRESH="${REFRESH:-3}"
 
 # --- install/update the package (user site) ---
 echo "cc-monitor: installing package from $pkg_dir"
-python3 -m pip install --user --upgrade "$pkg_dir" >/dev/null
+# pipx gives an isolated venv + a stable console-script on PATH. It is the supported installer
+# here: the host python has no pip module, and requires-python is >=3.14, so pin the interpreter.
+py="$(command -v python3.14 || command -v python3)"
+pipx install --force --python "$py" "$pkg_dir" >/dev/null
 
 bin="$(command -v cc-monitor || echo "$HOME/.local/bin/cc-monitor")"
 [[ -x "$bin" ]] || { echo "cc-monitor: entry point not found at $bin" >&2; exit 1; }
