@@ -1,0 +1,20 @@
+# systemd --user unit for cc-monitor (rendered by install/deploy.sh).
+# Localhost-only dashboard; lightweight (stdlib http), read-only over ~/.claude + /proc.
+# Kept OUT of cc-session's cgroup and resource-bounded to respect tp-server co-tenancy
+# (HASS / NAS share the host — see homelab-ops #1763 §8).
+[Unit]
+Description=cc-monitor — Claude Code session dashboard
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=__CCMONITOR_BIN__ serve --host 127.0.0.1 --port __PORT__ --refresh __REFRESH__
+Restart=on-failure
+RestartSec=5
+# co-tenancy guardrails
+MemoryMax=128M
+CPUQuota=25%
+Nice=10
+
+[Install]
+WantedBy=default.target

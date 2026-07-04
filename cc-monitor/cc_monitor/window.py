@@ -1,0 +1,79 @@
+"""Context-window (200k vs 1M) resolution.
+
+The true window is NOT in the transcript — the JSONL model field is always e.g.
+``claude-opus-4-8`` with no ``[1m]`` suffix. It IS recoverable from the worker's env
+(``ANTHROPIC_DEFAULT_<FAM>_MODEL`` carries ``[1m]``), reproducing Claude Code's own rule
+(``rE -> WIi``: ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` override, then the ``/\\[1m\\]/i`` regex).
+
+Two independent signals are combined so neither blind spot dominates:
+  1. worker env  — authoritative for low-usage sessions the peak can't classify
+  2. peak ctx    — a HARD LOWER BOUND: usage can't exceed the real window, so a peak above
+                   the env-derived value proves 1M (catches workers that got [1m] via CLI/other
+                   means where the env var is absent).
+"""
+from __future__ import annotations
+
+import os
+import re
+
+from . import paths
+
+BASELINE = 200_000
+ONE_M = 1_000_000
+_1M_RE = re.compile(r"\[1m\]", re.IGNORECASE)
+
+
+def read_model_env(pid, proc_dir: str | None = None):
+    """Model/context env keys from /proc/<pid>/environ, or None if unreadable.
+
+    Deliberately narrow — only ANTHROPIC_DEFAULT_* and CLAUDE_CODE_MAX_CONTEXT keys are
+    kept, so secret env values are never surfaced (see feedback: never read plaintext secrets).
+    """
+    if not pid:
+        return None
+    proc_dir = proc_dir or paths.PROC_DIR
+    try:
+        with open(os.path.join(proc_dir, str(pid), "environ"), "rb") as fh:
+            raw = fh.read().decode("utf-8", "ignore")
+    except OSError:
+        return None
+    env = {}
+    for kv in raw.split("\0"):
+        if kv.startswith(("ANTHROPIC_DEFAULT_", "CLAUDE_CODE_MAX_CONTEXT")):
+            key, _, val = kv.partition("=")
+            env[key] = val
+    return env
+
+
+def _family(model: str) -> str | None:
+    m = (model or "").lower()
+    if "opus" in m:
+        return "OPUS"
+    if "sonnet" in m:
+        return "SONNET"
+    if "haiku" in m:
+        return "HAIKU"
+    return None
+
+
+def resolve_window(env, model, peak_ctx):
+    """Return ``(window, certain)``.
+
+    ``env`` is the dict from :func:`read_model_env` (``None`` if unreadable). ``certain`` is
+    ``False`` only when the env is unreadable AND peak<=200k — the one case the window is truly
+    unknowable locally (flagged '?' in the UI, resolvable via statusLine/OTel).
+    """
+    if env is None:
+        # No env: fall back to peak alone. 1M only if usage already proves it.
+        win, certain = (ONE_M, True) if (peak_ctx or 0) > BASELINE else (BASELINE, False)
+    else:
+        mx = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "")
+        if mx.isdigit():
+            win, certain = int(mx), True
+        else:
+            fam = _family(model)
+            effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
+            win, certain = (ONE_M, True) if _1M_RE.search(effective) else (BASELINE, True)
+    if (peak_ctx or 0) > win:  # observed usage overrides a too-small guess
+        win, certain = ONE_M, True
+    return win, certain

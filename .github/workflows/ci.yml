@@ -23,6 +23,7 @@ jobs:
       backup-verification: ${{ steps.filter.outputs.backup-verification }}
       rclone-migrate: ${{ steps.filter.outputs.rclone-migrate }}
       cc-session: ${{ steps.filter.outputs.cc-session }}
+      cc-monitor: ${{ steps.filter.outputs.cc-monitor }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +41,9 @@ jobs:
               - '.github/workflows/ci.yml'
             cc-session:
               - 'cc-session/**'
+              - '.github/workflows/ci.yml'
+            cc-monitor:
+              - 'cc-monitor/**'
               - '.github/workflows/ci.yml'
             workflows:
               - '.github/**'
@@ -151,6 +155,45 @@ jobs:
         run: |
           echo "### rclone-migrate — coverage" >> "$GITHUB_STEP_SUMMARY"
           python -c "import xml.etree.ElementTree as ET; r=ET.parse('coverage.xml').getroot(); print(f'Line: {float(r.get(\"line-rate\",0))*100:.1f}%  Branch: {float(r.get(\"branch-rate\",0))*100:.1f}%')" >> "$GITHUB_STEP_SUMMARY"
+
+  cc-monitor:
+    name: cc-monitor (py${{ matrix.python }})
+    needs: changes
+    if: needs.changes.outputs.cc-monitor == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.9', '3.10', '3.11', '3.12', '3.13']
+    defaults:
+      run:
+        working-directory: cc-monitor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - name: Install
+        run: pip install -e ".[dev]" pytest-cov
+      - name: Test with coverage
+        run: |
+          pytest -v \
+            --cov=cc_monitor \
+            --cov-branch \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --junitxml=junit.xml
+      - name: Upload coverage artifact
+        if: always() && matrix.python == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-cc-monitor
+          path: cc-monitor/coverage.xml
+          retention-days: 14
 
   cc-session:
     name: cc-session (bats / ${{ matrix.os }})
