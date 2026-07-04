@@ -2,7 +2,7 @@
 name = "cc-monitor"
 version = "0.1.0"
 description = "Independent live dashboard for Claude Code sessions (cc-session + RC env-spawned): per-session model / token / context / running-status."
-requires-python = ">=3.9"
+requires-python = ">=3.14"
 license = { text = "Apache-2.0" }
 dependencies = []  # stdlib only — reads ~/.claude, /proc, /tmp/cc-session
 
