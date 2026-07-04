@@ -57,12 +57,13 @@ def test_write_textfile_atomic_no_temp_leftover(tmp_path):
     assert [f.name for f in (tmp_path / "sub").iterdir()] == ["cc-monitor.prom"]  # temp cleaned up
 
 
-def test_write_textfile_is_world_readable(tmp_path):
-    # mkstemp is 0600; the Alloy textfile collector often runs as another uid and must read it
+def test_write_textfile_is_group_readable(tmp_path):
+    # mkstemp is 0600; the Alloy textfile collector runs as another uid and must read it — grant
+    # GROUP read (0640), not world, so it stays least-privilege
     import os
     p = tmp_path / "cc-monitor.prom"
     metrics.write_textfile("cc_monitor_up 1\n", str(p))
-    assert (os.stat(p).st_mode & 0o777) == 0o644
+    assert (os.stat(p).st_mode & 0o777) == 0o640
 
 
 def test_broker_tick_populates_exposition(monkeypatch):

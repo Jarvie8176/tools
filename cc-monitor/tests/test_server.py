@@ -60,7 +60,7 @@ def test_unknown_path_is_404_not_dashboard(base_url):
 
 def test_api_config_get_then_post_persists(base_url, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CONFIG_FILE", str(tmp_path / "cfg.json"))
-    config._cache = None  # invalidate the (key, value) tuple cache
+    config._cache[0] = None  # invalidate the (key, value) tuple cache
     status, body = _get(base_url + "/api/config")
     assert status == 200
     assert json.loads(body)["ctx_warn_pct"] == config.DEFAULTS["ctx_warn_pct"]

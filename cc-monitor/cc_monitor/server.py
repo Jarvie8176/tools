@@ -90,13 +90,13 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                 else:
                     self._notfound()
             except (BrokenPipeError, ConnectionResetError):
-                pass
+                pass  # client went away mid-write — normal, not an error
             except Exception:
                 log.exception("cc-monitor POST failed")
                 try:
                     self._fail()
                 except (BrokenPipeError, ConnectionResetError):
-                    pass
+                    pass  # client already gone while sending the error — nothing to do
 
         def _save_config(self):
             try:

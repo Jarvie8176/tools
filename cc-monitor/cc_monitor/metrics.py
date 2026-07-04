@@ -84,8 +84,10 @@ def write_textfile(text: str, path: str | None) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
-        os.chmod(tmp, 0o644)  # mkstemp is 0600; the textfile collector often runs as another uid,
-        #                       and the metrics are non-sensitive aggregates — make them readable
+        # mkstemp is 0600; the textfile collector usually runs as a different uid and must read it.
+        # Grant GROUP read (not world) — least privilege: the deploy puts cc-monitor and the
+        # collector in a shared group (or the collector runs as root, which bypasses the mode).
+        os.chmod(tmp, 0o640)
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):

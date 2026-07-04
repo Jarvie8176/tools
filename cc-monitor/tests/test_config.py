@@ -8,9 +8,9 @@ from cc_monitor import config
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
-    config._cache = None  # each test picks a fresh tmp path; never reuse a cached mtime
+    config._cache[0] = None  # each test picks a fresh tmp path; never reuse a cached mtime
     yield
-    config._cache = None
+    config._cache[0] = None
 
 
 def test_defaults_when_file_absent(tmp_path):
@@ -45,7 +45,7 @@ def test_save_roundtrip_and_schema_gate(tmp_path):
     eff = config.save({"ctx_crit_pct": 70, "evil": "rm -rf"}, p)
     assert eff["ctx_crit_pct"] == 70
     assert "evil" not in eff               # unknown key never written
-    config._cache = None
+    config._cache[0] = None
     assert config.load(p)["ctx_crit_pct"] == 70  # persisted across reload
 
 
@@ -54,11 +54,11 @@ def test_save_coerces_bool(tmp_path):
     assert eff["redact_default"] is True
 
 
-def test_cache_is_atomic_tuple_and_save_invalidates(tmp_path):
-    # Fix A: cache is a single (key, value) tuple rebound atomically — never a two-field dict that
-    # a concurrent reader could observe half-updated (new key + stale/None value).
+def test_cache_is_atomic_holder_and_save_invalidates(tmp_path):
+    # Fix A: cache slot holds a single (key, value) tuple set with one atomic subscript store —
+    # never a two-field dict a concurrent reader could observe half-updated (new key + stale value).
     p = str(tmp_path / "cfg.json")
     config.load(p)
-    assert config._cache is None or isinstance(config._cache, tuple)
+    assert config._cache[0] is None or isinstance(config._cache[0], tuple)
     config.save({"ctx_warn_pct": 11}, p)      # save() must invalidate then repopulate
     assert config.load(p)["ctx_warn_pct"] == 11
