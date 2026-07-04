@@ -42,4 +42,4 @@ systemctl --user daemon-reload
 systemctl --user enable --now cc-monitor.service
 systemctl --user restart cc-monitor.service
 
-echo "cc-monitor: up on http://127.0.0.1:$PORT  (systemctl --user status cc-monitor)"
+echo "cc-monitor: up on http://$HOST:$PORT  (systemctl --user status cc-monitor)"

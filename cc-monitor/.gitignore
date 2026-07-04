@@ -1,0 +1,11 @@
+# Local deploy gate — instance-specific (PORT/HOST, e.g. the tailnet bind IP). Never commit;
+# install/.env.example is the tracked template.
+install/.env
+
+# Python build/cache
+__pycache__/
+*.egg-info/
+build/
+.venv/
+.pytest_cache/
+.coverage

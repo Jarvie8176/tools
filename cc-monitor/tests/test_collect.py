@@ -133,3 +133,16 @@ def test_render_escapes_xss_in_name_model_bridge(claude):
     assert "<script>x</script>" not in html
     assert "&lt;script&gt;" in html
     assert "<img>" not in html  # model escaped too
+
+
+def test_busy_idle_gap_env_override(monkeypatch):
+    import importlib
+    from cc_monitor import collect as c
+    monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "45")
+    importlib.reload(c)
+    assert c.BUSY_IDLE_GAP == 45
+    monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "not-a-number")
+    importlib.reload(c)
+    assert c.BUSY_IDLE_GAP == 12  # invalid -> default
+    monkeypatch.delenv("CC_MONITOR_BUSY_IDLE_GAP", raising=False)
+    importlib.reload(c)

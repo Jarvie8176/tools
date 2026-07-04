@@ -13,7 +13,15 @@ import time
 
 from . import ccsession, paths, titles, transcript, window
 
-BUSY_IDLE_GAP = 12  # seconds; env-spawned workers lack a status field -> mtime heuristic
+# seconds of transcript silence before the mtime heuristic flips busy->idle (env-spawned workers
+# lack a registry status field, so they rely on this). Empirical, not derived: a long model turn
+# or tool run with no intermediate write can exceed it and read as a false idle. Env-overridable
+# so an operator can widen it without a redeploy; the robust fix (per-refresh /proc CPU delta) is
+# tracked with the busy/active/idle/archived/orphaned/dead status model in homelab-ops M-B.
+try:
+    BUSY_IDLE_GAP = max(1, int(os.environ.get("CC_MONITOR_BUSY_IDLE_GAP", "12")))
+except ValueError:
+    BUSY_IDLE_GAP = 12
 
 # Parse cache keyed by path -> ((mtime, size), result). Transcripts are read fully to compute the
 # peak-context high-water-mark, and the live set can be hundreds of MB; without this, the server

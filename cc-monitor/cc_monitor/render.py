@@ -6,6 +6,14 @@ import time
 
 from .collect import title_of
 
+# Context-usage colour thresholds (percent of the window): green < WARN <= amber < CRIT <= red.
+CTX_WARN_PCT = 50
+CTX_CRIT_PCT = 80
+# Display truncation caps (chars). Text and HTML columns have different widths, hence two sets.
+TITLE_TRUNC_TEXT = 22
+PROMPT_TRUNC_TEXT = 40
+TITLE_TRUNC_HTML = 48
+PROMPT_TRUNC_HTML = 70
 
 # Strip C0/C1 control chars + DEL so a session's prompt can't inject ANSI escapes (terminal-title
 # / clear-screen / colour) into the `once`/`html` output that an operator views in a terminal.
@@ -63,11 +71,11 @@ def render_text(d: dict) -> str:
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
         mark = "●" if r["status"] == "busy" else "○"
         title, _src = title_of(r)
-        title = trunc(title, 22) if title else "—"
+        title = trunc(title, TITLE_TRUNC_TEXT) if title else "—"
         lines.append(
             f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {short_model(r['model']):11s} "
             f"{ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
-            f"{title:22s} {trunc(r['last_prompt'], 40) or '—'}"
+            f"{title:22s} {trunc(r['last_prompt'], PROMPT_TRUNC_TEXT) or '—'}"
         )
     lines.append("-" * 150)
     lines.append(
@@ -85,12 +93,12 @@ def _row_html(r: dict) -> str:
     win, certain = r["win"], r["win_certain"]
     pct = 100 * r["ctx"] / win if win else 0
     winlbl = f"{fmt_k(win)}{'' if certain else '?'}"
-    color = "#e5534b" if pct > 80 else "#d9a441" if pct > 50 else "#3fb950"
+    color = "#e5534b" if pct > CTX_CRIT_PCT else "#d9a441" if pct > CTX_WARN_PCT else "#3fb950"
     stat_c = "#3fb950" if r["status"] == "busy" else "#8b949e"
     cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
     title, src = title_of(r)
-    title_html = _html.escape(trunc(title, 48)) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
-    lastp = _html.escape(trunc(r["last_prompt"], 70)) or "—"
+    title_html = _html.escape(trunc(title, TITLE_TRUNC_HTML)) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
+    lastp = _html.escape(trunc(r["last_prompt"], PROMPT_TRUNC_HTML)) or "—"
     # every dynamic field is control-char-stripped then escaped — name/model/bridge come from
     # registry/transcript (semi-trusted)
     name = _html.escape(_clean(str(r["name"])))
