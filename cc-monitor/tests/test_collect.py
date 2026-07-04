@@ -97,10 +97,10 @@ def test_transcript_race_does_not_crash_collect(claude):
 
 def test_status_no_timestamp_trusts_registry():
     # regression: a busy status with no statusUpdatedAt (status_ts=0) must NOT be downgraded to idle
-    assert collect._status("busy", 0, 1000.0, 5000) == "busy"
-    assert collect._status("idle", 0, 1000.0, 1) == "idle"
+    assert collect._status("busy", 0, 1000.0, 5000, 12) == "busy"
+    assert collect._status("idle", 0, 1000.0, 1, 12) == "idle"
     # a stale idle (timestamp older than activity) still falls through to the activity heuristic
-    assert collect._status("idle", 1.0, 1000.0, 1) == "busy"
+    assert collect._status("idle", 1.0, 1000.0, 1, 12) == "busy"
 
 
 def test_parse_cache_reuses_unchanged_transcript(claude, monkeypatch):
@@ -135,14 +135,13 @@ def test_render_escapes_xss_in_name_model_bridge(claude):
     assert "<img>" not in html  # model escaped too
 
 
-def test_busy_idle_gap_env_override(monkeypatch):
-    import importlib
-    from cc_monitor import collect as c
+def test_busy_idle_gap_env_override(monkeypatch, tmp_path):
+    # BUSY_IDLE_GAP now lives in config; the env var is the ops escape hatch (highest precedence).
+    from cc_monitor import config
+    cfgfile = str(tmp_path / "cfg.json")
     monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "45")
-    importlib.reload(c)
-    assert c.BUSY_IDLE_GAP == 45
+    config._cache["key"] = None
+    assert config.load(cfgfile)["busy_idle_gap"] == 45
     monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "not-a-number")
-    importlib.reload(c)
-    assert c.BUSY_IDLE_GAP == 12  # invalid -> default
-    monkeypatch.delenv("CC_MONITOR_BUSY_IDLE_GAP", raising=False)
-    importlib.reload(c)
+    config._cache["key"] = None
+    assert config.load(cfgfile)["busy_idle_gap"] == 12  # invalid -> default

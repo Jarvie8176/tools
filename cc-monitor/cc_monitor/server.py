@@ -3,16 +3,19 @@ a trusted interface is configured). Threaded, with per-connection timeouts and a
 cache so one slow client or a rapid auto-refresh cannot wedge the whole dashboard."""
 from __future__ import annotations
 
+import json
 import logging
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import config
 from .collect import collect
 from .render import render_html
 
 log = logging.getLogger("cc-monitor")
 _CONN_TIMEOUT = 15  # seconds; drop slow/half-open connections instead of blocking a worker
+_MAX_BODY = 64 * 1024  # cap POST bodies — config is a handful of scalars, never a large payload
 
 
 class _Cache:
@@ -49,6 +52,8 @@ def _handler(cache: _Cache):
             try:
                 if path in ("/", "/index.html"):
                     self._ok(cache.get(time.time()))
+                elif path == "/api/config":
+                    self._json(config.load())  # UI/API reads the effective runtime config
                 elif path == "/favicon.ico":
                     self._empty()  # 204; the page also inlines a data-URI icon to avoid the request
                 else:
@@ -62,9 +67,53 @@ def _handler(cache: _Cache):
                 except (BrokenPipeError, ConnectionResetError):
                     pass  # client already gone while sending the error page — nothing to do
 
+        def do_POST(self):  # noqa: N802 (stdlib API name)
+            path = self.path.split("?", 1)[0].rstrip("/") or "/"
+            try:
+                if path == "/api/config":
+                    self._save_config()
+                else:
+                    self._notfound()
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            except Exception:
+                log.exception("cc-monitor POST failed")
+                try:
+                    self._fail()
+                except (BrokenPipeError, ConnectionResetError):
+                    pass
+
+        def _save_config(self):
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > _MAX_BODY:
+                self._json({"error": "bad or missing Content-Length"}, 400)
+                return
+            try:
+                data = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._json({"error": "invalid JSON"}, 400)
+                return
+            if not isinstance(data, dict):
+                self._json({"error": "expected a JSON object"}, 400)
+                return
+            # config.save is schema-gated: unknown keys ignored, values coerced+clamped — a POST
+            # can only ever set known scalars to in-range values, never write arbitrary content.
+            self._json(config.save(data))
+
         def _ok(self, body: bytes):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _json(self, obj, status: int = 200):
+            body = json.dumps(obj).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
