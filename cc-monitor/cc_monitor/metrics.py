@@ -84,11 +84,13 @@ def write_textfile(text: str, path: str | None) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
-        # mkstemp is 0600; the textfile collector usually runs as a different uid and must read it.
-        # Grant GROUP read (not world) — least privilege: the deploy puts cc-monitor and the
-        # collector in a shared group (or the collector runs as root, which bypasses the mode).
-        os.chmod(tmp, 0o640)
         os.replace(tmp, path)
+        # The file inherits mkstemp's 0600, and the atomic replace re-applies it on every write —
+        # so a differently-uid'd collector can only read it if it runs as root (root bypasses the
+        # mode), which is the norm for a system-level metrics agent. A NON-root collector would need
+        # cc-monitor to widen the mode here; that decision — with the collector's actual uid/gid —
+        # belongs to the deploy that enables CC_MONITOR_METRICS_FILE (fleet observability alignment),
+        # not a hardcoded, deploy-blind permission here.
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)

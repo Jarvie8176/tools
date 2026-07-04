@@ -53,6 +53,9 @@ and would leak session identity into the TSDB): `cc_monitor_sessions{status=...}
 For the fleet, prefer the **textfile** path over scraping `/metrics`: set
 `CC_MONITOR_METRICS_FILE` to a file under the Alloy textfile-collector dir and cc-monitor writes
 it atomically each refresh (aligned with the fleet's textfile convention, not an HTTP scrape).
+The file is written `0600` (owner-only); a system collector running as **root** reads it fine. A
+non-root collector would need a wider mode — set that in the deploy that enables the export, where
+the collector's uid/gid is known.
 
 **Privacy** — set `redact_default: true` (via `POST /api/config` or the config file) to mask each
 session's prompt **and** title to `[redacted]` server-side, across the HTML, text, and API/SSE
