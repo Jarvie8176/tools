@@ -18,6 +18,9 @@ source "$env_file"
 PORT="${PORT:-8899}"
 REFRESH="${REFRESH:-3}"
 HOST="${HOST:-127.0.0.1}"
+# Optional textfile metrics target (Alloy/node-exporter textfile collector dir). Unset = disabled;
+# an empty Environment= leaves paths.METRICS_FILE "" so cc-monitor writes no textfile.
+METRICS_FILE="${CC_MONITOR_METRICS_FILE:-}"
 
 # --- install/update the package (user site) ---
 echo "cc-monitor: installing package from $pkg_dir"
@@ -36,6 +39,7 @@ sed -e "s#__CCMONITOR_BIN__#$bin#g" \
     -e "s#__HOST__#$HOST#g" \
     -e "s#__PORT__#$PORT#g" \
     -e "s#__REFRESH__#$REFRESH#g" \
+    -e "s#__METRICS_FILE__#$METRICS_FILE#g" \
     "$here/cc-monitor.service.template" > "$unit_dir/cc-monitor.service"
 
 systemctl --user daemon-reload
