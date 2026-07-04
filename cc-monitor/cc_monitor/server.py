@@ -12,10 +12,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from . import config
 from .collect import collect
 from .render import render_html
+from .stream import Broker
 
 log = logging.getLogger("cc-monitor")
 _CONN_TIMEOUT = 15  # seconds; drop slow/half-open connections instead of blocking a worker
 _MAX_BODY = 64 * 1024  # cap POST bodies — config is a handful of scalars, never a large payload
+_SSE_HEARTBEAT = 10  # seconds; keep the stream/socket alive between changes (< _CONN_TIMEOUT)
 
 
 class _Cache:
@@ -39,7 +41,7 @@ class _Cache:
             return self.body
 
 
-def _handler(cache: _Cache):
+def _handler(cache: _Cache, broker: Broker | None = None):
     class Handler(BaseHTTPRequestHandler):
         timeout = _CONN_TIMEOUT
         protocol_version = "HTTP/1.1"
@@ -52,6 +54,10 @@ def _handler(cache: _Cache):
             try:
                 if path in ("/", "/index.html"):
                     self._ok(cache.get(time.time()))
+                elif path == "/api/sessions":
+                    self._json_bytes(broker.snapshot()[0]) if broker else self._notfound()
+                elif path == "/api/stream":
+                    self._stream(broker) if broker else self._notfound()  # needs serve() broker
                 elif path == "/api/config":
                     self._json(config.load())  # UI/API reads the effective runtime config
                 elif path == "/favicon.ico":
@@ -111,12 +117,35 @@ def _handler(cache: _Cache):
             self.wfile.write(body)
 
         def _json(self, obj, status: int = 200):
-            body = json.dumps(obj).encode("utf-8")
+            self._json_bytes(json.dumps(obj).encode("utf-8"), status)
+
+        def _json_bytes(self, body: bytes, status: int = 200):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _stream(self, broker: Broker):
+            # Server-Sent Events: one long-lived HTTP response, `data:` frames on each change and a
+            # comment heartbeat between changes. No Content-Length (open-ended); the browser's
+            # EventSource reconnects on its own if the socket drops.
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")  # ask proxies not to buffer the stream
+            self.end_headers()
+            payload, ver = broker.snapshot()
+            self.wfile.write(b"data: " + payload + b"\n\n")  # prime with the current snapshot
+            self.wfile.flush()
+            while True:
+                payload, newver = broker.wait(ver, _SSE_HEARTBEAT)
+                if newver != ver:
+                    ver = newver
+                    self.wfile.write(b"data: " + payload + b"\n\n")
+                else:
+                    self.wfile.write(b": ping\n\n")  # heartbeat — no change this interval
+                self.wfile.flush()
 
         def _empty(self):
             self.send_response(204)
@@ -147,11 +176,13 @@ def _handler(cache: _Cache):
 
 def serve(port: int, host: str = "127.0.0.1", refresh: int = 3) -> None:
     cache = _Cache(refresh)
+    broker = Broker(refresh)  # single collect loop feeding /api/sessions + /api/stream (SSE)
     try:  # warm the parse + render caches before binding, so the first request is instant
         cache.get(time.time())
+        broker.start()
     except Exception:
         log.exception("cc-monitor initial warm failed")
-    httpd = ThreadingHTTPServer((host, port), _handler(cache))
+    httpd = ThreadingHTTPServer((host, port), _handler(cache, broker))
     httpd.daemon_threads = True
     print(f"cc-monitor serving on http://{host}:{port}  (Ctrl-C to stop)")
     httpd.serve_forever()
