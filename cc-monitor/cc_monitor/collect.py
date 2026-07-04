@@ -104,7 +104,8 @@ def collect(now: float | None = None) -> dict:
             info = _parse_cached(tpath) if tpath else transcript.empty(_safe_mtime(reg_path))
         except OSError:
             info = transcript.empty()
-        idle_s = now - info["mtime"]
+        idle_s = max(0.0, now - info["mtime"])  # clamp: a transcript written after `now` was
+        #        sampled would otherwise show a negative idle (e.g. "-1s") for an active session
         status_ts = (reg.get("statusUpdatedAt", 0) or 0) / 1000  # registry epoch-ms -> s
         bridge = reg.get("bridgeSessionId") or ""
         win, win_certain = window.resolve_window(

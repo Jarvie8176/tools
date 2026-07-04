@@ -17,6 +17,8 @@ def _clean(s) -> str:
 
 
 def fmt_k(n: int) -> str:
+    if n >= 1_000_000:  # a 1M window / large cumulative reads cleaner as "1.0M" than "1000.0k"
+        return f"{n / 1_000_000:.1f}M"
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
@@ -113,6 +115,7 @@ def render_html(d: dict, refresh: int = 3) -> str:
     rows = "".join(_row_html(r) for r in d["rows"])
     return f"""<!doctype html><meta charset=utf-8>
 <meta http-equiv=refresh content={refresh}>
+<link rel=icon href="data:,">
 <title>cc-monitor</title>
 <style>
  body{{background:#0d1117;color:#c9d1d9;font-family:ui-monospace,Menlo,monospace;padding:18px}}

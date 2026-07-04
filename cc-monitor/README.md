@@ -20,10 +20,17 @@ routes around that by reading the authoritative local sources directly.
 ## Usage
 
 ```bash
-pip install -e ".[dev]"          # or: pip install --user .
 cc-monitor once                  # text snapshot
 cc-monitor html /tmp/dash.html   # self-refreshing HTML file
 cc-monitor serve --port 8899     # localhost dashboard (127.0.0.1 only)
+```
+
+Install for **deploy** with pipx (`install/deploy.sh` does this); the runtime is stdlib-only.
+For **development** — the host python often has no `pip` module — use a throwaway venv:
+
+```bash
+python3.14 -m venv .venv && .venv/bin/pip install -e ".[dev]"
+.venv/bin/pytest                 # run the suite
 ```
 
 View a remote host's dashboard over SSH: `ssh -L 8899:127.0.0.1:8899 <host>`.
@@ -34,8 +41,11 @@ View a remote host's dashboard over SSH: `ssh -L 8899:127.0.0.1:8899 <host>`.
 cp install/.env.example install/.env   # set PORT / REFRESH / HOST
 install/deploy.sh                       # idempotent: install pkg + unit, enable+start
 ```
-The unit is resource-bounded (`MemoryMax=128M`, `CPUQuota=25%`) and kept out of
-cc-session's cgroup to respect co-tenancy with other services on the host.
+The unit is resource-bounded (soft `MemoryHigh=256M` + hard `MemoryMax=512M`, `Nice=10`) so it
+yields to co-tenant services on the host. A soft high-watermark drives gentle reclaim of the
+reclaimable page cache from reading transcripts, rather than the reclaim storm a tight hard cap
+would cause; no `CPUQuota`, since the parse cache makes steady-state work ~0 and the one-time cold
+read must not be throttled into request timeouts.
 
 **Bind (`HOST`)** defaults to `127.0.0.1`. To expose behind an edge reverse proxy over
 Tailscale, set `HOST` to this host's tailscale0 IP — not `0.0.0.0`, so the raw port never
