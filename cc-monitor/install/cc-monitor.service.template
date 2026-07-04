@@ -14,6 +14,11 @@ Type=simple
 ExecStart=__CCMONITOR_BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
 Restart=on-failure
 RestartSec=5
+# Deterministic 0644 for the textfile metrics file (CC_MONITOR_METRICS_FILE) so the node-exporter
+# textfile collector — which runs as `nobody` — can read it, matching the other ccrc-written *.prom.
+# A --user session's ambient umask can be 0002 (→ 0664); pin it so the world-read bit is guaranteed
+# regardless of environment. cc-monitor writes no secrets (config is non-sensitive scalars).
+UMask=0022
 # co-tenancy guardrails. The process RSS is tiny (~30M); the bulk of cgroup memory is
 # reclaimable page cache from reading transcripts, so a tight hard MemoryMax causes a
 # reclaim storm rather than protection. Use a soft MemoryHigh (gentle reclaim) with a

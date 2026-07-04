@@ -1,23 +1,29 @@
 """Prometheus metrics — aggregate session gauges, exposed two ways.
 
-Aligned with the fleet's textfile-collector convention (#1416/#1239): the PRIMARY path is an
-atomically-written ``*.prom`` file that Alloy's textfile collector reads off disk — NOT an HTTP
-scrape target. cc-monitor binds a trusted interface only; standing up a scrape port would widen
-the surface for no gain when the collector already sweeps a textfile dir. The same exposition
-text is also served at ``GET /metrics`` for local validation (``curl`` the running instance).
+Follows the fleet's textfile-collector SOP (runbooks/monitoring/textfile-metrics-pattern.md,
+#1239/#1416): the PRIMARY path is an atomically-written ``*.prom`` under the node-exporter textfile
+dir (``/var/lib/node-exporter/textfile_collector`` on tp-server), read off disk by the existing
+node-exporter — NOT an HTTP scrape target (cc-monitor binds a trusted interface only). The same
+exposition text is also served at ``GET /metrics`` for local validation.
 
-Metrics are AGGREGATE, never per-session: a ``session="<uuid>"`` label would be high-cardinality
-and would leak session identity into the TSDB — the same exposure ``redact_default`` guards on the
-UI. The useful fleet signals are low-cardinality: counts by status, and the worst-case context
-utilisation (a session approaching its window is the thing worth alerting on).
+Metrics are AGGREGATE with BOUNDED labels, never per-session. A ``session_id`` label would be an
+UNBOUNDED, churning label — every new session mints a permanently-retained series (the SOP's #1673
+cardinality trap) and leaks session identity into the TSDB. Per-session detail lives in the
+dashboard/API; Prometheus holds only low-cardinality, alertable signals: counts by status, the
+worst-case context utilisation (a session near its window), and RC connectivity.
 
-Writing is DISABLED unless ``CC_MONITOR_METRICS_FILE`` (paths.METRICS_FILE) is set — the textfile
-collector dir is host-specific, so the deploy opts in; a dev/laptop run writes nothing by default.
+Two SOP contracts this file honours:
+- ``# HELP``/``# TYPE`` appear ONCE per metric family, never per series — node-exporter rejects the
+  WHOLE file otherwise (the "#71 bug").
+- every expected series is emitted even at 0 (all statuses, rc), so an absence-based alert can tell
+  a real zero from a dead writer; plus a ``cc_monitor_timestamp_seconds`` staleness watchdog.
+
+Writing is DISABLED unless ``CC_MONITOR_METRICS_FILE`` (paths.METRICS_FILE) is set — the collector
+dir is host-specific, so the deploy opts in; a dev/laptop run writes nothing by default.
 """
 from __future__ import annotations
 
 import os
-import tempfile
 
 # Fixed status label set — always emitted (even at 0) so the series exists for alerting: a missing
 # series and a genuine zero are indistinguishable to an absence-based alert, so we never omit one.
@@ -57,6 +63,8 @@ def render_exposition(d: dict) -> str:
 
     metric("cc_monitor_up", "cc-monitor exporter is running.", "gauge",
            ["cc_monitor_up 1"])
+    metric("cc_monitor_timestamp_seconds", "Unix time this exposition was generated (staleness "
+           "watchdog).", "gauge", [f"cc_monitor_timestamp_seconds {_fmt(d.get('ts', 0))}"])
     metric("cc_monitor_sessions", "Live registry sessions by status.", "gauge",
            [f'cc_monitor_sessions{{status="{s}"}} {counts[s]}' for s in _STATUSES])
     metric("cc_monitor_sessions_total", "Total live registry sessions.", "gauge",
@@ -73,24 +81,26 @@ def render_exposition(d: dict) -> str:
 def write_textfile(text: str, path: str | None) -> None:
     """Atomically write exposition ``text`` to ``path`` (no-op if ``path`` is falsy).
 
-    Atomic (temp + os.replace in the SAME dir) because the textfile collector may scrape mid-write;
-    a rename makes the reader see either the old file or the whole new one, never a torn half.
+    Atomic via a sibling ``.tmp`` + ``os.replace`` in the SAME dir: node-exporter scrapes ``*.prom``
+    only, so the transient ``.tmp`` is never read, and the rename makes the reader see either the
+    old file or the whole new one — never a torn half.
+
+    Uses a plain ``open`` (NOT ``tempfile.mkstemp``, which forces 0600) so the file lands at the
+    process umask — 0644 under the systemd unit (UMask 022). That matches the fleet convention: the
+    node-exporter textfile collector runs as ``nobody`` and reads the world-readable ``*.prom`` the
+    other ccrc-written generators already produce (e.g. ``cc_session_mem.prom``). A hardcoded chmod
+    would either be too tight (0600 → nobody can't read) or trip CodeQL (world/group read); letting
+    umask decide is both correct here and how every other textfile generator does it.
     """
     if not path:
         return  # writing disabled — deploy sets CC_MONITOR_METRICS_FILE to the collector dir
     d = os.path.dirname(path) or "."
     os.makedirs(d, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=d, prefix=".cc-monitor-metrics.")
+    tmp = path + ".tmp"
     try:
-        with os.fdopen(fd, "w") as fh:
+        with open(tmp, "w") as fh:
             fh.write(text)
         os.replace(tmp, path)
-        # The file inherits mkstemp's 0600, and the atomic replace re-applies it on every write —
-        # so a differently-uid'd collector can only read it if it runs as root (root bypasses the
-        # mode), which is the norm for a system-level metrics agent. A NON-root collector would need
-        # cc-monitor to widen the mode here; that decision — with the collector's actual uid/gid —
-        # belongs to the deploy that enables CC_MONITOR_METRICS_FILE (fleet observability alignment),
-        # not a hardcoded, deploy-blind permission here.
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)

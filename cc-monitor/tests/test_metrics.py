@@ -45,6 +45,21 @@ def test_exposition_has_help_type_and_trailing_newline():
     assert text.endswith("\n")  # Prometheus exposition ends with a newline
 
 
+def test_exposition_help_type_once_per_family_not_per_series():
+    # the "#71 bug": a repeated HELP/TYPE for a multi-series family makes node-exporter reject the
+    # WHOLE file. cc_monitor_sessions has 3 series (busy/idle/orphaned) but must carry one HELP/TYPE.
+    text = metrics.render_exposition({"rows": [{"status": "busy", "ctx": 0, "win": 1}], "prom": {}})
+    assert text.count("# HELP cc_monitor_sessions ") == 1
+    assert text.count("# TYPE cc_monitor_sessions ") == 1
+    assert text.count('cc_monitor_sessions{status=') == 3  # but three data series
+
+
+def test_exposition_emits_timestamp_staleness_gauge():
+    text = metrics.render_exposition({"rows": [], "prom": {}, "ts": 1751600000.0})
+    assert "# TYPE cc_monitor_timestamp_seconds gauge" in text
+    assert "cc_monitor_timestamp_seconds 1751600000.0" in text
+
+
 def test_write_textfile_disabled_is_noop():
     metrics.write_textfile("x", "")   # empty path -> writing disabled, no error, no file
     metrics.write_textfile("x", None)
