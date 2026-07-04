@@ -76,6 +76,17 @@ Tailscale, set `HOST` to this host's tailscale0 IP — not `0.0.0.0`, so the raw
 lands on the LAN. The dashboard has **no auth** (session prompts are rendered in the clear);
 only bind a trusted interface and front it with a reverse proxy on a trusted network.
 
+### Dev/staging instance
+
+`install/deploy-dev.sh` stands up a second instance **alongside** prod for previewing WIP: it runs
+the *current checkout* via an editable venv (restart to pick up commits), on `PORT_DEV` (default
+8898) with an isolated config. Run it from a dedicated worktree so it tracks the preview branch:
+
+```bash
+git worktree add ../.wt/cc-monitor-dev <branch>
+cd ../.wt/cc-monitor-dev && install/deploy-dev.sh   # -> cc-monitor-dev.service on :8898
+```
+
 ## Known local limits (honest, by design)
 
 - **Titles**: remote-control env-spawned sessions (the GUI's set) have no local `custom-title`
