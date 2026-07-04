@@ -51,21 +51,31 @@ def _safe_mtime(path: str) -> float:
         return 0.0
 
 
-def _proc_alive(pid, procstart=None) -> bool:
-    """Alive AND the same process — guards against PID reuse. The registry ``procStart`` equals
-    /proc/<pid>/stat field 22 (starttime, clock ticks); a mismatch means the PID was recycled."""
+def _proc_liveness(pid, procstart=None) -> str:
+    """Classify the worker process: ``gone`` / ``orphaned`` / ``alive``.
+
+    - ``gone``     — no such process, or the PID was recycled (registry ``procStart`` != /proc
+      ``starttime``, field 22 / tail index 19). Filtered out of the dashboard.
+    - ``orphaned`` — the naive liveness check passes (the PID is still listed in /proc and the
+      starttime matches) but the session is NOT actually reachable. Concrete case detected here:
+      a defunct process (stat field 3, the char after ``(comm)``, is Z=zombie or X=dead) — it
+      exited but wasn't reaped, so it lingers in the process table. This is what would otherwise
+      MASQUERADE as a live idle session (its transcript went silent → the mtime heuristic reads
+      ``idle``). Broader "alive but RC-unreachable" needs a per-session reachability probe that
+      isn't available locally yet (cc-session only exposes an aggregate rc_connected).
+    - ``alive``    — a real running/sleeping process (R/S/D/I/T...)."""
     if not pid:
-        return False
+        return "gone"
     try:
         with open(os.path.join(paths.PROC_DIR, str(pid), "stat")) as fh:
             tail = fh.read().rsplit(")", 1)[1].split()  # fields after "(comm)"
     except OSError:
-        return False
+        return "gone"
     if procstart:
         starttime = tail[19] if len(tail) > 19 else None  # field 22 == tail index 19
         if starttime is not None and str(procstart) != starttime:
-            return False
-    return True
+            return "gone"  # PID recycled — a different process now holds it
+    return "orphaned" if (tail and tail[0] in ("Z", "X")) else "alive"
 
 
 def _status(registry_status, status_ts: float, activity_ts: float, idle_s: float, gap: float) -> str:
@@ -96,8 +106,9 @@ def collect(now: float | None = None) -> dict:
             continue
         sid = reg.get("sessionId")
         pid = reg.get("pid")
-        if not sid or not _proc_alive(pid, reg.get("procStart")):
-            continue  # stale registry entry / no session id / PID reused
+        live = _proc_liveness(pid, reg.get("procStart"))
+        if not sid or live == "gone":
+            continue  # stale registry entry / no session id / PID reused (filtered)
         tpath = find_transcript(sid, reg.get("cwd", ""))
         if tpath:
             seen_paths.add(tpath)
@@ -117,7 +128,11 @@ def collect(now: float | None = None) -> dict:
             "name": reg.get("name", "-"),
             "bridge_id": bridge,
             "bridge_short": bridge.replace("session_", "s_")[:14] or "-",
-            "status": _status(reg.get("status"), status_ts, info["mtime"], idle_s, gap),
+            # an orphaned (present-but-not-reachable, e.g. defunct) process would otherwise read
+            # as "idle" (its transcript went silent) — surface it so a listed-but-dead session
+            # is not mistaken for a live one.
+            "status": "orphaned" if live == "orphaned"
+            else _status(reg.get("status"), status_ts, info["mtime"], idle_s, gap),
             "idle_s": idle_s,
             "win": win, "win_certain": win_certain,
             "override_title": titles.resolve(overrides, sid, bridge),

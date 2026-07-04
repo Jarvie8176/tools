@@ -145,3 +145,23 @@ def test_busy_idle_gap_env_override(monkeypatch, tmp_path):
     monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "not-a-number")
     config._cache["key"] = None
     assert config.load(cfgfile)["busy_idle_gap"] == 12  # invalid -> default
+
+
+def test_proc_liveness_classifies_gone_orphaned_alive(claude):
+    claude.proc_alive(500, starttime="900", state="S")   # normal
+    claude.proc_alive(501, starttime="900", state="Z")   # defunct
+    assert collect._proc_liveness(500, "900") == "alive"
+    assert collect._proc_liveness(501, "900") == "orphaned"
+    assert collect._proc_liveness(500, "999") == "gone"   # procStart mismatch = PID reuse
+    assert collect._proc_liveness(99999, None) == "gone"  # no such process
+
+
+def test_orphaned_session_shown_as_orphaned_not_idle(claude):
+    # a defunct worker: /proc still lists it (starttime matches) but state is Z. Its transcript
+    # went silent, so the mtime heuristic would say "idle" — it must show "orphaned" instead.
+    claude.registry(600, "zsid", "/home/x/p", name="cc-z", procstart="42")
+    claude.proc_alive(600, starttime="42", state="Z")
+    claude.transcript("zsid", "/home/x/p", [assistant("claude-opus-4-8", inp=1000)])
+    rows = collect.collect()["rows"]
+    z = [r for r in rows if r["session_id"] == "zsid"]
+    assert len(z) == 1 and z[0]["status"] == "orphaned"  # surfaced, not filtered, not "idle"

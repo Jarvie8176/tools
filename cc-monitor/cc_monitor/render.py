@@ -66,7 +66,7 @@ def render_text(d: dict) -> str:
         bar = "#" * min(int(pct / 10), 10) + "." * (10 - min(int(pct / 10), 10))
         ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{'' if certain else '?'}"
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
-        mark = "●" if r["status"] == "busy" else "○"
+        mark = "⚠" if r["status"] == "orphaned" else "●" if r["status"] == "busy" else "○"
         title, _src = title_of(r)
         title = trunc(title, cfg["title_trunc_text"]) if title else "—"
         lines.append(
@@ -76,7 +76,8 @@ def render_text(d: dict) -> str:
         )
     lines.append("-" * 150)
     lines.append(
-        " ● busy / ○ idle (registry status; env workers via mtime).  TITLE = custom-title"
+        " ● busy / ○ idle (registry status; env workers via mtime) / ⚠ orphaned (present, not reachable)."
+        "  TITLE = custom-title"
         " or manual override; '—' = env-spawned GUI session, real title cloud-side."
     )
     lines.append(
@@ -92,7 +93,7 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     pct = 100 * r["ctx"] / win if win else 0
     winlbl = f"{fmt_k(win)}{'' if certain else '?'}"
     color = "#e5534b" if pct > cfg["ctx_crit_pct"] else "#d9a441" if pct > cfg["ctx_warn_pct"] else "#3fb950"
-    stat_c = "#3fb950" if r["status"] == "busy" else "#8b949e"
+    stat_c = "#e5534b" if r["status"] == "orphaned" else "#3fb950" if r["status"] == "busy" else "#8b949e"
     cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
     title, src = title_of(r)
     title_html = _html.escape(trunc(title, cfg["title_trunc_html"])) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
@@ -143,7 +144,7 @@ def render_html(d: dict, refresh: int = 3) -> str:
 {rows}
 </table>
 <div class=small style='margin-top:10px'>
- ● busy / ○ idle = registry status (env workers via mtime) &nbsp;|&nbsp;
+ ● busy / ○ idle = registry status (env workers via mtime) / ⚠ orphaned = present but not reachable &nbsp;|&nbsp;
  title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  window = worker environ [1m] rule + peak lower-bound; "?" = env unreadable</div>
 """
