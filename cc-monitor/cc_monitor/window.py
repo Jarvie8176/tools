@@ -71,11 +71,15 @@ def resolve_window(env, model, peak_ctx):
     unknowable locally (flagged '?' in the UI, resolvable via statusLine/OTel).
     """
     if env is not None:
-        mx = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "")
         # An explicit ceiling is authoritative — return early, BEFORE the peak lower-bound, so a
-        # stale pre-throttle peak can't clobber a deliberately lowered window.
-        if mx.isdigit() and int(mx) > 0:
-            return int(mx), True
+        # stale pre-throttle peak can't clobber a deliberately lowered window. Parse defensively:
+        # str.isdigit() is True for Unicode digits (e.g. '²') that int() then rejects.
+        try:
+            mx = int(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", ""))
+        except ValueError:
+            mx = 0
+        if mx > 0:
+            return mx, True
         fam = _family(model)
         effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
         win, certain = (ONE_M, True) if _1M_RE.search(effective) else (BASELINE, True)

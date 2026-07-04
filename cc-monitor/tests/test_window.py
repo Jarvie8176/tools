@@ -54,6 +54,12 @@ def test_explicit_max_context_not_clobbered_by_peak():
     assert window.resolve_window(env, "claude-opus-4-8", 400_000) == (300_000, True)
 
 
+def test_max_context_unicode_digit_no_crash():
+    # str.isdigit() is True for '²' but int('²') raises — must fall back, not crash
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "²", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    assert window.resolve_window(env, "claude-opus-4-8", 0) == (1_000_000, True)
+
+
 def test_max_context_zero_ignored():
     env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "0", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
     assert window.resolve_window(env, "claude-opus-4-8", 10_000) == (1_000_000, True)

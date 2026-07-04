@@ -14,9 +14,13 @@ Type=simple
 ExecStart=__CCMONITOR_BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
 Restart=on-failure
 RestartSec=5
-# co-tenancy guardrails
-MemoryMax=128M
-CPUQuota=25%
+# co-tenancy guardrails. The process RSS is tiny (~30M); the bulk of cgroup memory is
+# reclaimable page cache from reading transcripts, so a tight hard MemoryMax causes a
+# reclaim storm rather than protection. Use a soft MemoryHigh (gentle reclaim) with a
+# generous hard backstop. No CPUQuota: the parse cache makes steady-state work ~0, and the
+# one-time cold read must not be throttled into request timeouts; Nice yields to co-tenants.
+MemoryHigh=256M
+MemoryMax=512M
 Nice=10
 
 [Install]

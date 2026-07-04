@@ -84,9 +84,11 @@ def parse(path: str, full: bool = True) -> dict:
                     continue
                 if etype == "user":
                     # Structural gate: only human-origin turns are prompts. Harness-injected turns
-                    # (task-notification, hook output, ...) carry origin.kind != "human".
-                    kind = (ev.get("origin") or {}).get("kind")
-                    if kind is not None and kind != "human":
+                    # (task-notification, hook output, ...) carry origin.kind != "human". origin can
+                    # be any JSON type in a malformed line, so guard the .get with isinstance.
+                    org = ev.get("origin")
+                    kind = org.get("kind") if isinstance(org, dict) else None
+                    if kind and kind != "human":
                         continue
                     txt = user_text(ev.get("message", {}).get("content"))
                     if txt:

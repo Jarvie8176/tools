@@ -71,6 +71,22 @@ def test_injected_origin_turn_skipped(claude):
     assert transcript.parse(path)["last_prompt"] == "real question"
 
 
+def test_malformed_origin_non_dict_no_crash(claude):
+    # origin can be any JSON type in a bad line — a truthy non-dict must not crash .get()
+    path = claude.transcript("s1", "/p", [
+        {"type": "user", "message": {"content": "real"}, "origin": "not-a-dict"},
+        assistant("claude-opus-4-8", inp=10),
+    ])
+    assert transcript.parse(path)["last_prompt"] == "real"
+
+
+def test_empty_origin_kind_treated_as_human(claude):
+    path = claude.transcript("s1", "/p", [
+        {"type": "user", "message": {"content": "kept"}, "origin": {"kind": ""}},
+    ])
+    assert transcript.parse(path)["last_prompt"] == "kept"
+
+
 def test_system_reminder_envelope_still_dropped(claude):
     path = claude.transcript("s1", "/p", [
         user("real"),

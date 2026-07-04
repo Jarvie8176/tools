@@ -95,6 +95,36 @@ def test_transcript_race_does_not_crash_collect(claude):
     assert len(d["rows"]) == 1 and d["rows"][0]["ctx"] == 0
 
 
+def test_status_no_timestamp_trusts_registry():
+    # regression: a busy status with no statusUpdatedAt (status_ts=0) must NOT be downgraded to idle
+    assert collect._status("busy", 0, 1000.0, 5000) == "busy"
+    assert collect._status("idle", 0, 1000.0, 1) == "idle"
+    # a stale idle (timestamp older than activity) still falls through to the activity heuristic
+    assert collect._status("idle", 1.0, 1000.0, 1) == "busy"
+
+
+def test_parse_cache_reuses_unchanged_transcript(claude, monkeypatch):
+    claude.registry(1, "u", "/home/x/p")
+    claude.proc_alive(1, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    collect._PARSE_CACHE.clear()
+    calls = []
+    real = collect.transcript.parse
+    monkeypatch.setattr(collect.transcript, "parse", lambda p: calls.append(p) or real(p))
+    collect.collect()
+    collect.collect()
+    assert len(calls) == 1  # second collect served from cache (transcript unchanged)
+
+
+def test_render_text_strips_ansi_control_chars(claude):
+    claude.registry(1, "u", "/home/x/p")
+    claude.proc_alive(1, {})
+    claude.transcript("u", "/home/x/p", [user("\x1b]0;PWN\x07hi\x1b[2J"),
+                                         assistant("claude-opus-4-8", inp=10)])
+    out = render.render_text(collect.collect())
+    assert "\x1b" not in out and "\x07" not in out and "PWN" in out
+
+
 def test_render_escapes_xss_in_name_model_bridge(claude):
     claude.registry(222, "u", "/home/x/p", name="<script>x</script>", bridge="session_<b>")
     claude.proc_alive(222, {})

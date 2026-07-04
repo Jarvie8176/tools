@@ -7,18 +7,27 @@ import time
 from .collect import title_of
 
 
+# Strip C0/C1 control chars + DEL so a session's prompt can't inject ANSI escapes (terminal-title
+# / clear-screen / colour) into the `once`/`html` output that an operator views in a terminal.
+_STRIP = dict.fromkeys(list(range(0x20)) + [0x7F] + list(range(0x80, 0xA0)), None)
+
+
+def _clean(s) -> str:
+    return (s or "").translate(_STRIP)
+
+
 def fmt_k(n: int) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
 def trunc(s: str, n: int) -> str:
-    """Cut to n chars with an ellipsis marker when clipped."""
-    s = s or ""
+    """Sanitize control chars, then cut to n chars with an ellipsis marker when clipped."""
+    s = _clean(s)
     return s if len(s) <= n else s[: n - 1] + "…"
 
 
 def short_model(m) -> str:
-    return (m or "-").replace("claude-", "")
+    return _clean((m or "-").replace("claude-", ""))
 
 
 def _idle(idle_s: float) -> str:
@@ -54,7 +63,7 @@ def render_text(d: dict) -> str:
         title, _src = title_of(r)
         title = trunc(title, 22) if title else "—"
         lines.append(
-            f" {mark} {r['u8']:8s} {r['name']:6s} {short_model(r['model']):11s} "
+            f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {short_model(r['model']):11s} "
             f"{ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
             f"{title:22s} {trunc(r['last_prompt'], 40) or '—'}"
         )
@@ -80,10 +89,11 @@ def _row_html(r: dict) -> str:
     title, src = title_of(r)
     title_html = _html.escape(trunc(title, 48)) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
     lastp = _html.escape(trunc(r["last_prompt"], 70)) or "—"
-    # every dynamic field is escaped — name/model/bridge come from registry/transcript (semi-trusted)
-    name = _html.escape(str(r["name"]))
+    # every dynamic field is control-char-stripped then escaped — name/model/bridge come from
+    # registry/transcript (semi-trusted)
+    name = _html.escape(_clean(str(r["name"])))
     model = _html.escape(short_model(r["model"]))
-    bridge = _html.escape(str(r["bridge_short"]))
+    bridge = _html.escape(_clean(str(r["bridge_short"])))
     return (
         f"<tr><td><span style='color:{stat_c}'>● {_html.escape(r['status'])}</span></td>"
         f"<td class=mono>{_html.escape(r['u8'])}</td><td class='mono small'>{name}</td>"

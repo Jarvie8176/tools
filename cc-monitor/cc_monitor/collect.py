@@ -15,6 +15,26 @@ from . import ccsession, paths, titles, transcript, window
 
 BUSY_IDLE_GAP = 12  # seconds; env-spawned workers lack a status field -> mtime heuristic
 
+# Parse cache keyed by path -> ((mtime, size), result). Transcripts are read fully to compute the
+# peak-context high-water-mark, and the live set can be hundreds of MB; without this, the server
+# would re-stream every transcript on every refresh and pin the memory cgroup with page cache.
+# A session's parse is reused until its transcript's mtime OR size changes (i.e. it wrote a line).
+_PARSE_CACHE: dict = {}
+
+
+def _parse_cached(path: str) -> dict:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return transcript.empty()
+    key = (st.st_mtime, st.st_size)
+    hit = _PARSE_CACHE.get(path)
+    if hit is not None and hit[0] == key:
+        return dict(hit[1])  # copy — the caller mutates (info.update) and must not touch the cache
+    result = transcript.parse(path)
+    _PARSE_CACHE[path] = (key, result)
+    return dict(result)
+
 
 def find_transcript(session_id: str, cwd: str) -> str | None:
     """Locate <sid>.jsonl by the cwd-derived slug, falling back to a cross-slug search."""
@@ -54,10 +74,10 @@ def _status(registry_status, status_ts: float, activity_ts: float, idle_s: float
     """busy/idle. Registry status is trusted only while it is at least as fresh as the last
     observed activity — a stale 'idle' (statusUpdatedAt older than the transcript write) does NOT
     mask a session that has since done work; it falls through to the activity heuristic."""
-    if registry_status == "busy" and status_ts >= activity_ts:
-        return "busy"
-    if registry_status == "idle" and status_ts >= activity_ts:
-        return "idle"
+    # Trust the registry status unless we KNOW it is stale (have a statusUpdatedAt older than the
+    # last activity). status_ts == 0 means "no timestamp" -> don't distrust, use the status as-is.
+    if registry_status in ("busy", "idle") and (status_ts == 0 or status_ts >= activity_ts):
+        return registry_status
     return "busy" if idle_s < BUSY_IDLE_GAP else "idle"  # no status, or status stale vs activity
 
 
@@ -66,6 +86,7 @@ def collect(now: float | None = None) -> dict:
     now = time.time() if now is None else now
     overrides = titles.load()
     rows = []
+    seen_paths = set()
     for reg_path in glob.glob(os.path.join(paths.SESSIONS_DIR, "*.json")):
         try:
             with open(reg_path) as fh:
@@ -77,8 +98,10 @@ def collect(now: float | None = None) -> dict:
         if not sid or not _proc_alive(pid, reg.get("procStart")):
             continue  # stale registry entry / no session id / PID reused
         tpath = find_transcript(sid, reg.get("cwd", ""))
+        if tpath:
+            seen_paths.add(tpath)
         try:
-            info = transcript.parse(tpath) if tpath else transcript.empty(_safe_mtime(reg_path))
+            info = _parse_cached(tpath) if tpath else transcript.empty(_safe_mtime(reg_path))
         except OSError:
             info = transcript.empty()
         idle_s = now - info["mtime"]
@@ -99,6 +122,8 @@ def collect(now: float | None = None) -> dict:
         })
         rows.append(info)
     rows.sort(key=lambda r: (r["status"] != "busy", -r.get("mtime", 0)))
+    for dead in [p for p in _PARSE_CACHE if p not in seen_paths]:  # bound cache to live sessions
+        del _PARSE_CACHE[dead]
     return {"rows": rows, "prom": ccsession.read(), "ts": now}
 
 
