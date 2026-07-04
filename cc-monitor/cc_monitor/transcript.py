@@ -12,7 +12,7 @@ import os
 
 MAX_FULL_PARSE = 60 * 1024 * 1024  # skip cumulative sum for transcripts bigger than this
 MAX_TEXT = 512  # cap retained title/prompt — the UI shows <=70 chars, and a pasted diff/log can
-#               be megabytes per line; keeping full text for every row risks OOM (see #1763 review).
+#               be megabytes per line; keeping full text for every row risks OOM.
 
 # Fallback prefixes for transcripts that predate the `origin` field. The primary filter is
 # structural (origin.kind != "human"); these only catch injected turns when origin is absent,

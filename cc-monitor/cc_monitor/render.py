@@ -61,7 +61,7 @@ def render_text(d: dict) -> str:
     lines.append("-" * 150)
     lines.append(
         " ● busy / ○ idle (registry status; env workers via mtime).  TITLE = custom-title"
-        " or manual override; '—' = env-spawned GUI session, real title cloud-side (#1764)."
+        " or manual override; '—' = env-spawned GUI session, real title cloud-side."
     )
     lines.append(
         " ctx = input-side (#27361-safe). window = worker environ [1m] rule + peak lower-bound;"
@@ -124,6 +124,6 @@ def render_html(d: dict, refresh: int = 3) -> str:
 </table>
 <div class=small style='margin-top:10px'>
  ● busy / ○ idle = registry status (env workers via mtime) &nbsp;|&nbsp;
- title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side (#1764) &nbsp;|&nbsp;
+ title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  window = worker environ [1m] rule + peak lower-bound; "?" = env unreadable</div>
 """

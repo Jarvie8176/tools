@@ -1,7 +1,7 @@
 # systemd --user unit for cc-monitor (rendered by install/deploy.sh).
 # Localhost-only dashboard; lightweight (stdlib http), read-only over ~/.claude + /proc.
-# Kept OUT of cc-session's cgroup and resource-bounded to respect tp-server co-tenancy
-# (HASS / NAS share the host — see homelab-ops #1763 §8).
+# Kept out of cc-session's cgroup and resource-bounded to respect co-tenancy with other
+# services on the host.
 [Unit]
 Description=cc-monitor — Claude Code session dashboard
 After=network.target

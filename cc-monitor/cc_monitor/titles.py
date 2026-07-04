@@ -1,4 +1,4 @@
-"""Local title override (#1764).
+"""Local title override.
 
 RC env-spawned sessions (the GUI's set) have no local ``custom-title`` — the real title lives
 cloud-side only. This provides a hand-maintained local map so the dashboard can show a human
