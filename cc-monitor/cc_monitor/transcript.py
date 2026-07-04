@@ -11,6 +11,13 @@ import json
 import os
 
 MAX_FULL_PARSE = 60 * 1024 * 1024  # skip cumulative sum for transcripts bigger than this
+MAX_TEXT = 512  # cap retained title/prompt — the UI shows <=70 chars, and a pasted diff/log can
+#               be megabytes per line; keeping full text for every row risks OOM (see #1763 review).
+
+# Fallback prefixes for transcripts that predate the `origin` field. The primary filter is
+# structural (origin.kind != "human"); these only catch injected turns when origin is absent,
+# and are precise enough not to drop a genuine prompt that merely starts with '<'.
+_ENVELOPE_PREFIXES = ("<system-reminder", "<local-command", "[Request interrupted")
 
 
 def user_text(content) -> str | None:
@@ -30,7 +37,7 @@ def user_text(content) -> str | None:
     if not text:
         return None
     text = text.strip()
-    if text.startswith(("<", "[Request interrupted", "Caveat:")):
+    if text.startswith(_ENVELOPE_PREFIXES):
         return None
     return text
 
@@ -56,7 +63,11 @@ def parse(path: str, full: bool = True) -> dict:
     last_model = last_usage = None
     custom_title = last_user = None
     peak_ctx = cum_input = cum_output = cum_cache = 0
-    size = os.path.getsize(path)
+    try:  # stat once, up front — a transcript can rotate/vanish mid-read (hot file)
+        size = os.path.getsize(path)
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return empty()
     do_full = full and size <= MAX_FULL_PARSE
     try:
         with open(path, errors="ignore") as fh:
@@ -72,6 +83,11 @@ def parse(path: str, full: bool = True) -> dict:
                     custom_title = ev["customTitle"]  # human-set; last one wins
                     continue
                 if etype == "user":
+                    # Structural gate: only human-origin turns are prompts. Harness-injected turns
+                    # (task-notification, hook output, ...) carry origin.kind != "human".
+                    kind = (ev.get("origin") or {}).get("kind")
+                    if kind is not None and kind != "human":
+                        continue
                     txt = user_text(ev.get("message", {}).get("content"))
                     if txt:
                         last_user = txt  # actual last user prompt (overwrite)
@@ -100,8 +116,8 @@ def parse(path: str, full: bool = True) -> dict:
         "model": last_model,
         "ctx": _ctx_of(last_usage) if last_usage else 0,
         "peak_ctx": peak_ctx,
-        "custom_title": " ".join(custom_title.split()) if custom_title else "",
-        "last_prompt": " ".join(last_user.split()) if last_user else "",
+        "custom_title": " ".join(custom_title.split())[:MAX_TEXT] if custom_title else "",
+        "last_prompt": " ".join(last_user.split())[:MAX_TEXT] if last_user else "",
         "cum_input": cum_input, "cum_output": cum_output, "cum_cache": cum_cache,
-        "full": do_full, "mtime": os.path.getmtime(path), "size": size,
+        "full": do_full, "mtime": mtime, "size": size,
     }

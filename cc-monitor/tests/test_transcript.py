@@ -53,6 +53,42 @@ def test_last_prompt_skips_tool_envelopes(claude):
     assert transcript.parse(path)["last_prompt"] == "real question"
 
 
+def test_legit_angle_bracket_prompt_preserved(claude):
+    # a real prompt that starts with '<' (pasted XML/HTML) must NOT be dropped as an envelope
+    path = claude.transcript("s1", "/p", [
+        user("<div>my actual question about this html</div>"),
+        assistant("claude-opus-4-8", inp=100),
+    ])
+    assert transcript.parse(path)["last_prompt"].startswith("<div>my actual question")
+
+
+def test_injected_origin_turn_skipped(claude):
+    # a harness-injected turn (origin.kind != human) is not a prompt, even if its text is plain
+    path = claude.transcript("s1", "/p", [
+        user("real question", kind="human"),
+        user("<task-notification>...</task-notification>", kind="task-notification"),
+    ])
+    assert transcript.parse(path)["last_prompt"] == "real question"
+
+
+def test_system_reminder_envelope_still_dropped(claude):
+    path = claude.transcript("s1", "/p", [
+        user("real"),
+        user("<system-reminder>noise</system-reminder>"),
+    ])
+    assert transcript.parse(path)["last_prompt"] == "real"
+
+
+def test_long_prompt_capped(claude):
+    big = "x" * 5000
+    path = claude.transcript("s1", "/p", [user(big), assistant("claude-opus-4-8", inp=10)])
+    assert len(transcript.parse(path)["last_prompt"]) == transcript.MAX_TEXT
+
+
+def test_missing_file_returns_empty():
+    assert transcript.parse("/no/such/transcript.jsonl")["ctx"] == 0
+
+
 def test_cumulative_tokens(claude):
     path = claude.transcript("s1", "/p", [
         assistant("claude-opus-4-8", inp=100, out=10),

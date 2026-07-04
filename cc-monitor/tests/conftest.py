@@ -22,12 +22,16 @@ class FakeClaude:
             os.makedirs(d, exist_ok=True)
         self.titles_file = os.path.join(root, "titles.json")
 
-    def proc_alive(self, pid, env: dict | None = None):
+    def proc_alive(self, pid, env: dict | None = None, starttime="12345"):
         d = os.path.join(self.proc, str(pid))
         os.makedirs(d, exist_ok=True)
         blob = b"".join(f"{k}={v}".encode() + b"\0" for k, v in (env or {}).items())
         with open(os.path.join(d, "environ"), "wb") as fh:
             fh.write(blob)
+        # /proc/<pid>/stat: field 22 (starttime) is index 19 after "(comm)"
+        tail = ["S"] + ["0"] * 18 + [str(starttime)] + ["0"] * 5
+        with open(os.path.join(d, "stat"), "w") as fh:
+            fh.write(f"{pid} (claude) " + " ".join(tail))
 
     def transcript(self, session_id, cwd, events):
         slug = cwd.replace("/", "-")
@@ -39,12 +43,17 @@ class FakeClaude:
                 fh.write(json.dumps(ev) + "\n")
         return path
 
-    def registry(self, pid, session_id, cwd, name="cc-xx", status=None, bridge=None):
+    def registry(self, pid, session_id, cwd, name="cc-xx", status=None, bridge=None,
+                 procstart=None, status_updated_at=None):
         rec = {"pid": pid, "sessionId": session_id, "cwd": cwd, "name": name}
         if status:
             rec["status"] = status
         if bridge:
             rec["bridgeSessionId"] = bridge
+        if procstart is not None:
+            rec["procStart"] = procstart
+        if status_updated_at is not None:
+            rec["statusUpdatedAt"] = status_updated_at
         with open(os.path.join(self.sessions, f"{pid}.json"), "w") as fh:
             json.dump(rec, fh)
 
@@ -70,8 +79,11 @@ def assistant(model, inp, cache_read=0, cache_creation=0, out=0):
         "cache_creation_input_tokens": cache_creation, "output_tokens": out}}}
 
 
-def user(text):
-    return {"type": "user", "message": {"content": text}}
+def user(text, kind=None):
+    ev = {"type": "user", "message": {"content": text}}
+    if kind is not None:
+        ev["origin"] = {"kind": kind}
+    return ev
 
 
 def custom_title(t):

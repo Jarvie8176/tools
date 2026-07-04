@@ -5,6 +5,9 @@
 [Unit]
 Description=cc-monitor — Claude Code session dashboard
 After=network.target
+# Stop a crash-loop from hammering the co-tenant host: >5 restarts in 60s -> give up.
+StartLimitIntervalSec=60
+StartLimitBurst=5
 
 [Service]
 Type=simple

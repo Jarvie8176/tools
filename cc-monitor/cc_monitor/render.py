@@ -80,16 +80,20 @@ def _row_html(r: dict) -> str:
     title, src = title_of(r)
     title_html = _html.escape(trunc(title, 48)) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
     lastp = _html.escape(trunc(r["last_prompt"], 70)) or "—"
+    # every dynamic field is escaped — name/model/bridge come from registry/transcript (semi-trusted)
+    name = _html.escape(str(r["name"]))
+    model = _html.escape(short_model(r["model"]))
+    bridge = _html.escape(str(r["bridge_short"]))
     return (
-        f"<tr><td><span style='color:{stat_c}'>● {r['status']}</span></td>"
-        f"<td class=mono>{r['u8']}</td><td class='mono small'>{r['name']}</td>"
+        f"<tr><td><span style='color:{stat_c}'>● {_html.escape(r['status'])}</span></td>"
+        f"<td class=mono>{_html.escape(r['u8'])}</td><td class='mono small'>{name}</td>"
         f"<td>{title_html} <span class=small style='opacity:.5'>[{src}]</span></td>"
         f"<td class='mono small' style='color:#7d8590'>{lastp}</td>"
-        f"<td class=mono>{short_model(r['model'])}</td>"
+        f"<td class=mono>{model}</td>"
         f"<td><div class=barwrap><div class=bar style='width:{min(pct, 100):.0f}%;background:{color}'></div></div>"
         f" <span class=small>{fmt_k(r['ctx'])}/{winlbl} ({pct:.0f}%)</span></td>"
         f"<td class=mono>{cum}</td><td>{_idle(r['idle_s'])}</td>"
-        f"<td class='mono small'>{r['bridge_short']}</td></tr>"
+        f"<td class='mono small'>{bridge}</td></tr>"
     )
 
 

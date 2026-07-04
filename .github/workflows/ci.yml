@@ -265,7 +265,7 @@ jobs:
   ci-pass:
     name: CI pass
     if: always()
-    needs: [lint, backup-verification, rclone-migrate, cc-session]
+    needs: [lint, backup-verification, rclone-migrate, cc-session, cc-monitor]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded or were skipped

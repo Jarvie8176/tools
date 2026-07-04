@@ -6,9 +6,10 @@ from .conftest import assistant, custom_title, user
 
 
 def test_discovers_both_populations(claude):
-    # a --resume worker (registry has status) + an env-spawned worker (no status)
+    # a --resume worker (registry has FRESH status) + an env-spawned worker (no status)
+    fresh = int((time.time() + 3600) * 1000)  # statusUpdatedAt newer than transcript activity
     claude.registry(101, "res-uuid", "/home/x/p", name="cc-01", status="idle",
-                    bridge="session_res")
+                    bridge="session_res", status_updated_at=fresh)
     claude.proc_alive(101, {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
     claude.transcript("res-uuid", "/home/x/p", [
         custom_title("SSH manifest epic"),
@@ -66,3 +67,39 @@ def test_render_smoke(claude):
     d = collect.collect()
     assert "cc-monitor" in render.render_text(d)
     assert "<table>" in render.render_html(d)
+
+
+def test_pid_reuse_skipped_via_procstart(claude):
+    # registry says the process started at tick 999, but the live PID started at 111 -> reused
+    claude.registry(808, "u", "/home/x/p", procstart="999")
+    claude.proc_alive(808, {}, starttime="111")
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    assert collect.collect()["rows"] == []
+
+
+def test_stale_idle_status_falls_through_to_activity(claude):
+    # status says idle but statusUpdatedAt is days older than a just-written transcript -> not trusted
+    claude.registry(909, "u", "/home/x/p", status="idle", status_updated_at=1)  # ~epoch 0
+    claude.proc_alive(909, {})
+    claude.transcript("u", "/home/x/p", [user("hi"), assistant("claude-opus-4-8", inp=10)])
+    # fresh transcript -> activity heuristic -> busy, despite the stale 'idle'
+    assert collect.collect(now=time.time())["rows"][0]["status"] == "busy"
+
+
+def test_transcript_race_does_not_crash_collect(claude):
+    # registry points at a transcript path that does not exist -> parse returns empty, no raise
+    claude.registry(111, "ghost-uuid", "/home/x/p")
+    claude.proc_alive(111, {})
+    # no transcript written for ghost-uuid
+    d = collect.collect()
+    assert len(d["rows"]) == 1 and d["rows"][0]["ctx"] == 0
+
+
+def test_render_escapes_xss_in_name_model_bridge(claude):
+    claude.registry(222, "u", "/home/x/p", name="<script>x</script>", bridge="session_<b>")
+    claude.proc_alive(222, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8<img>", inp=10)])
+    html = render.render_html(collect.collect())
+    assert "<script>x</script>" not in html
+    assert "&lt;script&gt;" in html
+    assert "<img>" not in html  # model escaped too

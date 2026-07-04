@@ -46,3 +46,22 @@ def test_read_model_env_masks_non_model_keys(claude):
 
 def test_read_model_env_missing_proc_returns_none(claude):
     assert window.read_model_env(999999) is None
+
+
+def test_explicit_max_context_not_clobbered_by_peak():
+    # a deliberately-lowered ceiling must win even when a stale peak exceeds it
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "300000"}
+    assert window.resolve_window(env, "claude-opus-4-8", 400_000) == (300_000, True)
+
+
+def test_max_context_zero_ignored():
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "0", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    assert window.resolve_window(env, "claude-opus-4-8", 10_000) == (1_000_000, True)
+
+
+def test_read_model_env_excludes_default_headers(claude):
+    claude.proc_alive(4243, {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]",
+                             "ANTHROPIC_DEFAULT_HEADERS": "x-api-key: sk-secret"})
+    env = window.read_model_env(4243)
+    assert "ANTHROPIC_DEFAULT_HEADERS" not in env  # prefix match would have captured this
+    assert env == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}

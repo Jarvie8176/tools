@@ -28,3 +28,8 @@ def test_session_id_takes_precedence_over_bridge(claude):
 
 def test_no_match_returns_empty(claude):
     assert titles.resolve({}, "uuid-1", "session_abc") == ""
+
+
+def test_non_string_value_coerced_not_crash(claude):
+    # a hand-edit typo (missing quotes) must not later crash render via trunc(int)
+    assert titles.resolve({"uuid-1": 42}, "uuid-1", None) == "42"

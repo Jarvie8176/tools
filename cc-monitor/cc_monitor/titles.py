@@ -25,9 +25,13 @@ def load(path: str | None = None) -> dict:
 
 
 def resolve(overrides: dict, session_id: str, bridge_id: str | None) -> str:
-    """Override title for a session, by sessionId or bridgeSessionId, else ''."""
-    if session_id and session_id in overrides:
-        return overrides[session_id]
-    if bridge_id and bridge_id in overrides:
-        return overrides[bridge_id]
+    """Override title for a session, by sessionId or bridgeSessionId, else ''.
+
+    Values are coerced to ``str`` — the file is hand-maintained, and a non-string value
+    (e.g. a number from a missing-quotes typo) must not crash rendering downstream.
+    """
+    for key in (session_id, bridge_id):
+        if key and key in overrides:
+            val = overrides[key]
+            return str(val) if val is not None else ""
     return ""

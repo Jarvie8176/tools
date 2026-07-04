@@ -21,6 +21,13 @@ from . import paths
 BASELINE = 200_000
 ONE_M = 1_000_000
 _1M_RE = re.compile(r"\[1m\]", re.IGNORECASE)
+# Exact keys only — a prefix match would also capture ANTHROPIC_DEFAULT_HEADERS (auth headers).
+_WANTED_ENV = frozenset({
+    "ANTHROPIC_DEFAULT_OPUS_MODEL",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+})
 
 
 def read_model_env(pid, proc_dir: str | None = None):
@@ -39,8 +46,8 @@ def read_model_env(pid, proc_dir: str | None = None):
         return None
     env = {}
     for kv in raw.split("\0"):
-        if kv.startswith(("ANTHROPIC_DEFAULT_", "CLAUDE_CODE_MAX_CONTEXT")):
-            key, _, val = kv.partition("=")
+        key, sep, val = kv.partition("=")
+        if sep and key in _WANTED_ENV:
             env[key] = val
     return env
 
@@ -63,17 +70,18 @@ def resolve_window(env, model, peak_ctx):
     ``False`` only when the env is unreadable AND peak<=200k — the one case the window is truly
     unknowable locally (flagged '?' in the UI, resolvable via statusLine/OTel).
     """
-    if env is None:
+    if env is not None:
+        mx = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "")
+        # An explicit ceiling is authoritative — return early, BEFORE the peak lower-bound, so a
+        # stale pre-throttle peak can't clobber a deliberately lowered window.
+        if mx.isdigit() and int(mx) > 0:
+            return int(mx), True
+        fam = _family(model)
+        effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
+        win, certain = (ONE_M, True) if _1M_RE.search(effective) else (BASELINE, True)
+    else:
         # No env: fall back to peak alone. 1M only if usage already proves it.
         win, certain = (ONE_M, True) if (peak_ctx or 0) > BASELINE else (BASELINE, False)
-    else:
-        mx = env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", "")
-        if mx.isdigit():
-            win, certain = int(mx), True
-        else:
-            fam = _family(model)
-            effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
-            win, certain = (ONE_M, True) if _1M_RE.search(effective) else (BASELINE, True)
-    if (peak_ctx or 0) > win:  # observed usage overrides a too-small guess
+    if (peak_ctx or 0) > win:  # observed usage overrides a too-small INFERRED window
         win, certain = ONE_M, True
     return win, certain
