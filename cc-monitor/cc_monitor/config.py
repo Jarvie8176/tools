@@ -35,7 +35,12 @@ DEFAULTS: dict = {k: v[0] for k, v in SCHEMA.items()}
 # ops escape hatch: env var wins over the file for these keys.
 _ENV = {"busy_idle_gap": "CC_MONITOR_BUSY_IDLE_GAP"}
 
-_cache: dict = {"key": None, "value": None}  # (path, mtime) -> merged config
+# Cache as a SINGLE tuple (key, value) rebound atomically — NOT a two-field dict. A dict update
+# (`_cache["key"], _cache["value"] = ...`) is two separate stores, so a concurrent reader could
+# observe the new key paired with the old/None value (a torn read → stale config, or `dict(None)`
+# on cold start). A lone tuple rebind is one atomic reference swap: a reader sees the old pair or
+# the new pair, never a mix. Matters under a free-threaded build and at cold-start first-request.
+_cache: tuple | None = None  # (key, merged-config); None = empty / invalidated
 
 
 def _coerce(key: str, raw):
@@ -64,14 +69,16 @@ def _read_raw(path: str) -> dict:
 
 def load(path: str | None = None) -> dict:
     """Return the effective config (defaults <- file <- env), re-parsing only on mtime change."""
+    global _cache
     path = path or paths.CONFIG_FILE
     try:
         mtime = os.path.getmtime(path)
     except OSError:
         mtime = 0.0
     key = (path, mtime)
-    if _cache["key"] == key:
-        return dict(_cache["value"])  # copy — callers must not mutate the cache
+    cached = _cache  # single atomic read of the (key, value) pair — cannot tear
+    if cached is not None and cached[0] == key:
+        return dict(cached[1])  # copy — callers must not mutate the cache
     cfg = dict(DEFAULTS)
     raw = _read_raw(path)
     for k in SCHEMA:
@@ -80,12 +87,13 @@ def load(path: str | None = None) -> dict:
     for k, env in _ENV.items():  # env overrides the file (ops hard override)
         if os.environ.get(env) is not None:
             cfg[k] = _coerce(k, os.environ[env])
-    _cache["key"], _cache["value"] = key, cfg
+    _cache = (key, cfg)  # single atomic rebind
     return dict(cfg)
 
 
 def save(partial: dict, path: str | None = None) -> dict:
     """Merge ``partial`` into the config file (schema-gated, atomic write); return new effective."""
+    global _cache
     path = path or paths.CONFIG_FILE
     merged = _read_raw(path)
     for k, v in (partial or {}).items():
@@ -100,5 +108,5 @@ def save(partial: dict, path: str | None = None) -> dict:
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
-    _cache["key"] = None  # invalidate
+    _cache = None  # invalidate
     return load(path)

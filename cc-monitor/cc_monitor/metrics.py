@@ -84,6 +84,8 @@ def write_textfile(text: str, path: str | None) -> None:
     try:
         with os.fdopen(fd, "w") as fh:
             fh.write(text)
+        os.chmod(tmp, 0o644)  # mkstemp is 0600; the textfile collector often runs as another uid,
+        #                       and the metrics are non-sensitive aggregates — make them readable
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):

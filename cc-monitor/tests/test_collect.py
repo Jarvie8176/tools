@@ -140,10 +140,10 @@ def test_busy_idle_gap_env_override(monkeypatch, tmp_path):
     from cc_monitor import config
     cfgfile = str(tmp_path / "cfg.json")
     monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "45")
-    config._cache["key"] = None
+    config._cache = None
     assert config.load(cfgfile)["busy_idle_gap"] == 45
     monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "not-a-number")
-    config._cache["key"] = None
+    config._cache = None
     assert config.load(cfgfile)["busy_idle_gap"] == 12  # invalid -> default
 
 

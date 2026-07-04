@@ -18,6 +18,8 @@ log = logging.getLogger("cc-monitor")
 _CONN_TIMEOUT = 15  # seconds; drop slow/half-open connections instead of blocking a worker
 _MAX_BODY = 64 * 1024  # cap POST bodies — config is a handful of scalars, never a large payload
 _SSE_HEARTBEAT = 10  # seconds; keep the stream/socket alive between changes (< _CONN_TIMEOUT)
+_MAX_SSE = 128  # cap concurrent /api/stream connections -> one thread each; bound the resource surface
+_BACKLOG = 128  # accept-queue depth; stdlib default 5 gives a ~1s TCP-RTO tail under connection bursts
 
 
 class _Cache:
@@ -42,6 +44,11 @@ class _Cache:
 
 
 def _handler(cache: _Cache, broker: Broker | None = None):
+    # Shared across all handler threads of this server: a hard bound on concurrent SSE streams
+    # (each is a long-lived thread). Past the cap, /api/stream is refused with 503 rather than
+    # spawning unbounded threads. A value of 0 refuses every stream (used to exercise the path).
+    sse_slots = threading.BoundedSemaphore(_MAX_SSE)
+
     class Handler(BaseHTTPRequestHandler):
         timeout = _CONN_TIMEOUT
         protocol_version = "HTTP/1.1"
@@ -132,22 +139,28 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             # Server-Sent Events: one long-lived HTTP response, `data:` frames on each change and a
             # comment heartbeat between changes. No Content-Length (open-ended); the browser's
             # EventSource reconnects on its own if the socket drops.
-            self.send_response(200)
-            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
-            self.send_header("Cache-Control", "no-cache")
-            self.send_header("X-Accel-Buffering", "no")  # ask proxies not to buffer the stream
-            self.end_headers()
-            payload, ver = broker.snapshot()
-            self.wfile.write(b"data: " + payload + b"\n\n")  # prime with the current snapshot
-            self.wfile.flush()
-            while True:
-                payload, newver = broker.wait(ver, _SSE_HEARTBEAT)
-                if newver != ver:
-                    ver = newver
-                    self.wfile.write(b"data: " + payload + b"\n\n")
-                else:
-                    self.wfile.write(b": ping\n\n")  # heartbeat — no change this interval
+            if not sse_slots.acquire(blocking=False):  # cap concurrent streams (bounded threads)
+                self._json({"error": "too many concurrent streams"}, 503)
+                return
+            try:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("X-Accel-Buffering", "no")  # ask proxies not to buffer the stream
+                self.end_headers()
+                payload, ver = broker.snapshot()
+                self.wfile.write(b"data: " + payload + b"\n\n")  # prime with the current snapshot
                 self.wfile.flush()
+                while True:
+                    payload, newver = broker.wait(ver, _SSE_HEARTBEAT)
+                    if newver != ver:
+                        ver = newver
+                        self.wfile.write(b"data: " + payload + b"\n\n")
+                    else:
+                        self.wfile.write(b": ping\n\n")  # heartbeat — no change this interval
+                    self.wfile.flush()
+            finally:
+                sse_slots.release()  # runs on disconnect (BrokenPipe/timeout) — frees the slot
 
         def _metrics(self, broker: Broker):
             # Serve the broker's cached exposition (refreshed each collect tick) — the same text
@@ -186,6 +199,11 @@ def _handler(cache: _Cache, broker: Broker | None = None):
     return Handler
 
 
+class _Server(ThreadingHTTPServer):
+    daemon_threads = True     # a hung request thread must not block process exit
+    request_queue_size = _BACKLOG  # stdlib default 5 -> ~1s TCP-RTO tail under connection bursts
+
+
 def serve(port: int, host: str = "127.0.0.1", refresh: int = 3) -> None:
     cache = _Cache(refresh)
     broker = Broker(refresh)  # single collect loop feeding /api/sessions + /api/stream (SSE)
@@ -194,7 +212,6 @@ def serve(port: int, host: str = "127.0.0.1", refresh: int = 3) -> None:
         broker.start()
     except Exception:
         log.exception("cc-monitor initial warm failed")
-    httpd = ThreadingHTTPServer((host, port), _handler(cache, broker))
-    httpd.daemon_threads = True
+    httpd = _Server((host, port), _handler(cache, broker))
     print(f"cc-monitor serving on http://{host}:{port}  (Ctrl-C to stop)")
     httpd.serve_forever()

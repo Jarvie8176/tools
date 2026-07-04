@@ -83,18 +83,20 @@ class Broker:
         except Exception:
             log.exception("cc-monitor broker collect failed")  # keep the loop alive
             return
-        try:  # metrics are best-effort — a textfile write error must not stall the stream loop
-            expo = metrics.render_exposition(d)
-            self._exposition = expo.encode()
-            metrics.write_textfile(expo, paths.METRICS_FILE)
-        except Exception:
-            log.exception("cc-monitor metrics write failed")
+        # Notify SSE clients FIRST: serialize + version bump before touching the textfile, so a
+        # slow/full metrics disk can never delay the push (the write is best-effort, the push isn't).
         payload = serialize(d)
         if payload != self._payload:
             with self._cv:
                 self._payload = payload
                 self._version += 1
                 self._cv.notify_all()
+        try:  # metrics are best-effort — a write error/slowness must not stall the stream loop
+            expo = metrics.render_exposition(d)
+            self._exposition = expo.encode()
+            metrics.write_textfile(expo, paths.METRICS_FILE)
+        except Exception:
+            log.exception("cc-monitor metrics write failed")
 
     def _run(self) -> None:
         while not self._stop.wait(self.interval):
