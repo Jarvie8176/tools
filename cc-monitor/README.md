@@ -32,11 +32,17 @@ View a remote host's dashboard over SSH: `ssh -L 8899:127.0.0.1:8899 <host>`.
 ## Deploy (systemd --user)
 
 ```bash
-cp install/.env.example install/.env   # set PORT / REFRESH
+cp install/.env.example install/.env   # set PORT / REFRESH / HOST
 install/deploy.sh                       # idempotent: install pkg + unit, enable+start
 ```
 The unit is resource-bounded (`MemoryMax=128M`, `CPUQuota=25%`) and kept out of
 cc-session's cgroup to respect tp-server co-tenancy (HASS/NAS share the host).
+
+**Bind (`HOST`)** defaults to `127.0.0.1`. To expose behind an edge reverse proxy over
+Tailscale, set `HOST` to this host's tailscale0 IP (e.g. `100.75.137.96`) — not `0.0.0.0`,
+so the raw port never lands on the LAN. The dashboard has **no auth**; only bind a trusted
+interface. On the homelab this is fronted by servarica Caddy at `cc-monitor.h.fnpg.me`
+(tailnet-only), homelab-ops#1763.
 
 ## Known local limits (honest, by design)
 

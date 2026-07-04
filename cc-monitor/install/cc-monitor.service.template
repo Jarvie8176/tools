@@ -11,7 +11,7 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=__CCMONITOR_BIN__ serve --host 127.0.0.1 --port __PORT__ --refresh __REFRESH__
+ExecStart=__CCMONITOR_BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
 Restart=on-failure
 RestartSec=5
 # co-tenancy guardrails

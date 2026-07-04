@@ -17,6 +17,7 @@ fi
 source "$env_file"
 PORT="${PORT:-8899}"
 REFRESH="${REFRESH:-3}"
+HOST="${HOST:-127.0.0.1}"
 
 # --- install/update the package (user site) ---
 echo "cc-monitor: installing package from $pkg_dir"
@@ -32,6 +33,7 @@ bin="$(command -v cc-monitor || echo "$HOME/.local/bin/cc-monitor")"
 unit_dir="$HOME/.config/systemd/user"
 mkdir -p "$unit_dir"
 sed -e "s#__CCMONITOR_BIN__#$bin#g" \
+    -e "s#__HOST__#$HOST#g" \
     -e "s#__PORT__#$PORT#g" \
     -e "s#__REFRESH__#$REFRESH#g" \
     "$here/cc-monitor.service.template" > "$unit_dir/cc-monitor.service"
