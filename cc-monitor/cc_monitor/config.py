@@ -28,7 +28,7 @@ SCHEMA: dict = {
     "prompt_trunc_text": (40, 4, 512),
     "title_trunc_html":  (48, 4, 512),
     "prompt_trunc_html": (70, 4, 512),
-    "redact_default":    (False, None, None),  # privacy default (consumed when redact lands, M-C)
+    "redact_default":    (False, None, None),  # on -> server masks prompt+title before output (privacy.py)
 }
 DEFAULTS: dict = {k: v[0] for k, v in SCHEMA.items()}
 

@@ -14,3 +14,6 @@ CONFIG_FILE = os.path.expanduser(
 )
 CCSESSION_DIR = os.environ.get("CC_MONITOR_CCSESSION_DIR", "/tmp/cc-session")
 PROC_DIR = os.environ.get("CC_MONITOR_PROC_DIR", "/proc")
+# Textfile metrics target (Alloy textfile-collector dir, e.g. .../textfile/cc-monitor.prom).
+# Empty = metrics writing disabled; the deploy opts in since the collector dir is host-specific.
+METRICS_FILE = os.path.expanduser(os.environ.get("CC_MONITOR_METRICS_FILE", ""))

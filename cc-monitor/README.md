@@ -35,6 +35,30 @@ python3.14 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 
 View a remote host's dashboard over SSH: `ssh -L 8899:127.0.0.1:8899 <host>`.
 
+## HTTP API & metrics
+
+The `serve` mode exposes, alongside the HTML dashboard:
+
+| Route | Purpose |
+|---|---|
+| `GET /api/sessions` | current session rows as JSON (the same projection the SSE stream pushes) |
+| `GET /api/stream` | Server-Sent Events — one `data:` frame per real change, heartbeats between |
+| `GET /api/config` · `POST /api/config` | read / update the runtime config (schema-gated, persisted) |
+| `GET /metrics` | Prometheus exposition — **aggregate** session gauges (see below) |
+
+**Metrics** are aggregate, never per-session (a `session=<uuid>` label would be high-cardinality
+and would leak session identity into the TSDB): `cc_monitor_sessions{status=...}`,
+`cc_monitor_sessions_total`, `cc_monitor_context_tokens_sum`, `cc_monitor_context_pct_max`
+(worst-case window utilisation — the thing worth alerting on), `cc_monitor_rc_connected`.
+For the fleet, prefer the **textfile** path over scraping `/metrics`: set
+`CC_MONITOR_METRICS_FILE` to a file under the Alloy textfile-collector dir and cc-monitor writes
+it atomically each refresh (aligned with the fleet's textfile convention, not an HTTP scrape).
+
+**Privacy** — set `redact_default: true` (via `POST /api/config` or the config file) to mask each
+session's prompt **and** title to `[redacted]` server-side, across the HTML, text, and API/SSE
+output. The real text never leaves the process (nothing to un-blur client-side); structural fields
+(uuid, status, tokens) stay visible so the dashboard is still useful while redacted.
+
 ## Deploy (systemd --user)
 
 ```bash

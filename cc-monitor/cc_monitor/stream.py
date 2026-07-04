@@ -21,9 +21,13 @@ import json
 import logging
 import threading
 
+from . import config, metrics, paths, privacy
 from .collect import collect
 
 log = logging.getLogger("cc-monitor")
+
+# Free-text fields masked when redact_default is on — same set the HTML/text renderers redact.
+_REDACT_FIELDS = ("custom_title", "override_title", "last_prompt")
 
 # Row fields exposed over the API. `mtime` is remapped to `last_activity_ts` (absolute) so the
 # client can tick idle locally without a server push; `idle_s`/`ts` are deliberately excluded
@@ -37,10 +41,17 @@ _API_FIELDS = (
 
 
 def serialize(d: dict) -> bytes:
-    """Project a collect() result to the stable API payload (compact, change-stable JSON)."""
+    """Project a collect() result to the stable API payload (compact, change-stable JSON).
+
+    When ``redact_default`` is on, the free-text fields are masked HERE — the real prompt/title
+    never enter the payload, so an API/SSE client cannot recover them (safe-by-default: there is
+    nothing to un-blur without an authenticated server round-trip, tracked for M-C)."""
+    on = config.load()["redact_default"]
     sessions = []
     for r in d["rows"]:
         s = {k: r.get(k) for k in _API_FIELDS}
+        for f in _REDACT_FIELDS:
+            s[f] = privacy.redact(s.get(f), on)
         s["last_activity_ts"] = r.get("mtime")
         sessions.append(s)
     return json.dumps({"sessions": sessions, "prom": d["prom"]}, separators=(",", ":")).encode()
@@ -55,6 +66,7 @@ class Broker:
         self._cv = threading.Condition()
         self._payload = b'{"sessions":[],"prom":{}}'
         self._version = 0
+        self._exposition = b""  # latest Prometheus exposition (for GET /metrics); atomic ref swap
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True, name="cc-monitor-broker")
 
@@ -67,10 +79,17 @@ class Broker:
 
     def _tick(self) -> None:
         try:
-            payload = serialize(collect())
+            d = collect()  # one collect per tick feeds BOTH the SSE payload and the metrics
         except Exception:
             log.exception("cc-monitor broker collect failed")  # keep the loop alive
             return
+        try:  # metrics are best-effort — a textfile write error must not stall the stream loop
+            expo = metrics.render_exposition(d)
+            self._exposition = expo.encode()
+            metrics.write_textfile(expo, paths.METRICS_FILE)
+        except Exception:
+            log.exception("cc-monitor metrics write failed")
+        payload = serialize(d)
         if payload != self._payload:
             with self._cv:
                 self._payload = payload
@@ -84,6 +103,10 @@ class Broker:
     def snapshot(self) -> tuple[bytes, int]:
         with self._cv:
             return self._payload, self._version
+
+    def exposition(self) -> bytes:
+        """Latest Prometheus exposition bytes (empty until the first successful tick)."""
+        return self._exposition
 
     def wait(self, last_version: int, timeout: float) -> tuple[bytes, int]:
         """Block until the version moves past ``last_version`` or ``timeout`` elapses (heartbeat)."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 import html as _html
 import time
 
-from . import config
+from . import config, privacy
 from .collect import title_of
 
 # Colour thresholds (ctx_warn/crit_pct) and truncation caps (title/prompt_trunc_text/html) are
@@ -67,12 +67,15 @@ def render_text(d: dict) -> str:
         ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{'' if certain else '?'}"
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
         mark = "⚠" if r["status"] == "orphaned" else "●" if r["status"] == "busy" else "○"
+        redact_on = cfg["redact_default"]
         title, _src = title_of(r)
+        title = privacy.redact(title, redact_on)
         title = trunc(title, cfg["title_trunc_text"]) if title else "—"
+        lastp = trunc(privacy.redact(r["last_prompt"], redact_on), cfg["prompt_trunc_text"]) or "—"
         lines.append(
             f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {short_model(r['model']):11s} "
             f"{ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
-            f"{title:22s} {trunc(r['last_prompt'], cfg['prompt_trunc_text']) or '—'}"
+            f"{title:22s} {lastp}"
         )
     lines.append("-" * 150)
     lines.append(
@@ -95,9 +98,11 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     color = "#e5534b" if pct > cfg["ctx_crit_pct"] else "#d9a441" if pct > cfg["ctx_warn_pct"] else "#3fb950"
     stat_c = "#e5534b" if r["status"] == "orphaned" else "#3fb950" if r["status"] == "busy" else "#8b949e"
     cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
+    redact_on = cfg["redact_default"]
     title, src = title_of(r)
+    title = privacy.redact(title, redact_on)
     title_html = _html.escape(trunc(title, cfg["title_trunc_html"])) if title else "<span style='opacity:.4'>— (cloud-side)</span>"
-    lastp = _html.escape(trunc(r["last_prompt"], cfg["prompt_trunc_html"])) or "—"
+    lastp = _html.escape(trunc(privacy.redact(r["last_prompt"], redact_on), cfg["prompt_trunc_html"])) or "—"
     # every dynamic field is control-char-stripped then escaped — name/model/bridge come from
     # registry/transcript (semi-trusted)
     name = _html.escape(_clean(str(r["name"])))

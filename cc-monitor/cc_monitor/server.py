@@ -60,6 +60,8 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                     self._stream(broker) if broker else self._notfound()  # needs serve() broker
                 elif path == "/api/config":
                     self._json(config.load())  # UI/API reads the effective runtime config
+                elif path == "/metrics":
+                    self._metrics(broker) if broker else self._notfound()  # aggregate exposition
                 elif path == "/favicon.ico":
                     self._empty()  # 204; the page also inlines a data-URI icon to avoid the request
                 else:
@@ -146,6 +148,16 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                 else:
                     self.wfile.write(b": ping\n\n")  # heartbeat — no change this interval
                 self.wfile.flush()
+
+        def _metrics(self, broker: Broker):
+            # Serve the broker's cached exposition (refreshed each collect tick) — the same text
+            # written to the textfile collector. No extra collect() per scrape.
+            body = broker.exposition()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def _empty(self):
             self.send_response(204)
