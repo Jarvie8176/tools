@@ -52,8 +52,6 @@ def render_exposition(d: dict) -> str:
         win = r.get("win") or 0
         if win:
             pct_max = max(pct_max, 100.0 * (r.get("ctx", 0) or 0) / win)
-    rc = 1 if d.get("prom", {}).get("rc_connected") == "1" else 0
-
     out = []
 
     def metric(name, help_, typ, samples):
@@ -73,8 +71,10 @@ def render_exposition(d: dict) -> str:
            "gauge", [f"cc_monitor_context_tokens_sum {_fmt(ctx_sum)}"])
     metric("cc_monitor_context_pct_max", "Highest per-session context-window utilisation (0-100).",
            "gauge", [f"cc_monitor_context_pct_max {_fmt(pct_max)}"])
-    metric("cc_monitor_rc_connected", "cc-session remote-control connectivity (1=connected).",
-           "gauge", [f"cc_monitor_rc_connected {rc}"])
+    if d.get("cc_session"):  # only when the cc-session supervisor is on this host — absence of the
+        rc = 1 if d["prom"].get("rc_connected") == "1" else 0  # series means "N/A", not "RC down"
+        metric("cc_monitor_rc_connected", "cc-session remote-control connectivity (1=connected).",
+               "gauge", [f"cc_monitor_rc_connected {rc}"])
     return "\n".join(out) + "\n"  # exposition text ends with a trailing newline
 
 

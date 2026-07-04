@@ -141,7 +141,8 @@ def collect(now: float | None = None) -> dict:
     rows.sort(key=lambda r: (r["status"] != "busy", -r.get("mtime", 0)))
     for dead in [p for p in _PARSE_CACHE if p not in seen_paths]:  # bound cache to live sessions
         del _PARSE_CACHE[dead]
-    return {"rows": rows, "prom": ccsession.read(), "ts": now}
+    prom = ccsession.read()  # None when cc-session isn't on this host (optional enrichment)
+    return {"rows": rows, "prom": prom or {}, "cc_session": prom is not None, "ts": now}
 
 
 def title_of(row: dict) -> tuple[str, str]:

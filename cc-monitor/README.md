@@ -1,12 +1,15 @@
 # cc-monitor
 
-Independent live dashboard for **Claude Code sessions** on a host running the
-[cc-session](../cc-session/) supervisor and Claude Code remote-control. Shows, per session:
-**model · token usage · context size (with true 200k/1M window) · running status**.
+Independent, **standalone** live dashboard for **Claude Code sessions** on any host running Claude
+Code. Shows, per session: **model · token usage · context size (with true 200k/1M window) ·
+running status**. Discovery reads Claude Code's own `~/.claude/sessions` registry — it does **not**
+depend on the [cc-session](../cc-session/) supervisor. When cc-session *does* run on the same host,
+its supervisor health is surfaced in the header as an optional enrichment; when it doesn't, the
+dashboard shows a plain standalone view (no misleading "RC down").
 
-It exists because the remote-control GUI's context readout is unstable (the supervisor
-scrapes `Capacity: N/M` from a tmux pane and has no per-worker token view). cc-monitor
-routes around that by reading the authoritative local sources directly.
+It exists because Claude Code's remote-control GUI context readout is unstable (a supervisor that
+scrapes `Capacity: N/M` from a tmux pane has no per-worker token view). cc-monitor routes around
+that by reading the authoritative local sources directly.
 
 ## What it reads (all local, read-only)
 
@@ -15,7 +18,7 @@ routes around that by reading the authoritative local sources directly.
 | `~/.claude/sessions/<pid>.json` | session discovery + `busy`/`idle` status + `bridgeSessionId` (covers **both** cc-session `--resume` workers and RC env-spawned workers) |
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, last prompt |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
-| `/tmp/cc-session/claude.prom` | cc-session supervisor health (header, display only) |
+| `/tmp/cc-session/claude.prom` | **optional** cc-session supervisor health (header only; absent → standalone view) |
 
 ## Usage
 

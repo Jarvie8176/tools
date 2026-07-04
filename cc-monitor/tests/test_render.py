@@ -33,3 +33,18 @@ def test_html_inlines_empty_favicon_to_suppress_request():
     # browser must not fetch /favicon.ico (which the server would otherwise 204) on every refresh
     d = {"ts": 0, "prom": {}, "rows": []}
     assert 'rel=icon href="data:,"' in render.render_html(d)
+
+
+def test_standalone_omits_cc_session_header_no_misleading_rc_down():
+    # cc-session absent -> no "cc-session RC" line; show a standalone marker instead of "RC DOWN"
+    d = {"ts": 0, "prom": {}, "rows": [], "cc_session": False}
+    text, html = render.render_text(d), render.render_html(d)
+    assert "cc-session RC" not in text and "DOWN" not in text and "standalone" in text
+    assert "cc-session RC" not in html and "standalone" in html
+
+
+def test_cc_session_header_shown_when_supervisor_present():
+    d = {"ts": 0, "rows": [], "cc_session": True,
+         "prom": {"rc_connected": "1", "auth_healthy": "1", "workers": "3", "capacity": "8"}}
+    assert "cc-session RC: connected" in render.render_text(d)
+    assert "cc-session RC:" in render.render_html(d) and "standalone" not in render.render_html(d)

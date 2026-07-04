@@ -54,7 +54,10 @@ def serialize(d: dict) -> bytes:
             s[f] = privacy.redact(s.get(f), on)
         s["last_activity_ts"] = r.get("mtime")
         sessions.append(s)
-    return json.dumps({"sessions": sessions, "prom": d["prom"]}, separators=(",", ":")).encode()
+    return json.dumps(
+        {"sessions": sessions, "prom": d["prom"], "cc_session": d.get("cc_session", False)},
+        separators=(",", ":"),
+    ).encode()
 
 
 class Broker:

@@ -48,12 +48,15 @@ def render_text(d: dict) -> str:
     cfg = config.load()
     prom = d["prom"]
     lines = ["=" * 92, f" cc-monitor   {_ts(d['ts'])}", "=" * 92]
-    rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
-    lines.append(
-        f" cc-session RC: {rc:10s} auth:{'ok' if prom.get('auth_healthy') == '1' else '?':4s} "
-        f"workers(scraped):{prom.get('workers', '?')}/{prom.get('capacity', '?')}  "
-        f"registry_sessions:{len(d['rows'])}"
-    )
+    if d.get("cc_session"):  # optional enrichment — only when the supervisor is on THIS host
+        rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
+        lines.append(
+            f" cc-session RC: {rc:10s} auth:{'ok' if prom.get('auth_healthy') == '1' else '?':4s} "
+            f"workers(scraped):{prom.get('workers', '?')}/{prom.get('capacity', '?')}  "
+            f"registry_sessions:{len(d['rows'])}"
+        )
+    else:  # standalone: no cc-session here — show the registry count, not a misleading "RC DOWN"
+        lines.append(f" registry_sessions:{len(d['rows'])}   (standalone — no cc-session supervisor)")
     lines.append("-" * 92)
     lines.append(
         f" {'ST':2s} {'UUID8':8s} {'NAME':6s} {'MODEL':11s} {'CONTEXT':>14s} "
@@ -124,7 +127,16 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
 def render_html(d: dict, refresh: int = 3) -> str:
     cfg = config.load()
     prom = d["prom"]
-    rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
+    n = len(d["rows"])
+    if d.get("cc_session"):  # optional enrichment — only when the supervisor is on THIS host
+        rc = "connected" if prom.get("rc_connected") == "1" else "DOWN/?"
+        header = (
+            f"cc-session RC: <b>{rc}</b> &middot; auth: <b>{'ok' if prom.get('auth_healthy') == '1' else '?'}</b>"
+            f" &middot; workers(scraped): <b>{prom.get('workers', '?')}/{prom.get('capacity', '?')}</b>"
+            f" &middot; registry sessions: <b>{n}</b>"
+        )
+    else:  # standalone: no cc-session here — don't imply a broken RC
+        header = f"registry sessions: <b>{n}</b> &middot; <span style='opacity:.6'>standalone (no cc-session supervisor)</span>"
     rows = "".join(_row_html(r, cfg) for r in d["rows"])
     return f"""<!doctype html><meta charset=utf-8>
 <meta http-equiv=refresh content={refresh}>
@@ -140,9 +152,7 @@ def render_html(d: dict, refresh: int = 3) -> str:
  .bar{{height:8px;border-radius:4px}}
 </style>
 <h1>cc-monitor &nbsp;<span class=small>{_ts(d['ts'])} &middot; auto-refresh {refresh}s</span></h1>
-<div class=small>cc-session RC: <b>{rc}</b> &middot; auth: <b>{'ok' if prom.get('auth_healthy') == '1' else '?'}</b>
- &middot; workers(scraped): <b>{prom.get('workers', '?')}/{prom.get('capacity', '?')}</b>
- &middot; registry sessions: <b>{len(d['rows'])}</b></div>
+<div class=small>{header}</div>
 <table>
 <tr><th>status</th><th>uuid8</th><th>name</th><th>title</th><th>last-prompt</th><th>model</th>
     <th>context (input-side, #27361-safe)</th><th>cum in/out</th><th>idle</th><th>bridge (cloud)</th></tr>

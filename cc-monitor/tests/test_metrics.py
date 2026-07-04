@@ -34,9 +34,14 @@ def test_pct_max_ignores_unknown_window():
     assert "cc_monitor_context_pct_max 0.0" in metrics.render_exposition(d)
 
 
-def test_exposition_rc_connected_passthrough():
-    assert "cc_monitor_rc_connected 1" in metrics.render_exposition({"rows": [], "prom": {"rc_connected": "1"}})
-    assert "cc_monitor_rc_connected 0" in metrics.render_exposition({"rows": [], "prom": {}})
+def test_exposition_rc_connected_only_when_cc_session_present():
+    # present + connected -> 1; present + down -> 0; ABSENT -> series omitted (N/A, not "down")
+    assert "cc_monitor_rc_connected 1" in metrics.render_exposition(
+        {"rows": [], "prom": {"rc_connected": "1"}, "cc_session": True})
+    assert "cc_monitor_rc_connected 0" in metrics.render_exposition(
+        {"rows": [], "prom": {}, "cc_session": True})
+    assert "cc_monitor_rc_connected" not in metrics.render_exposition(
+        {"rows": [], "prom": {}, "cc_session": False})
 
 
 def test_exposition_has_help_type_and_trailing_newline():
@@ -81,7 +86,8 @@ def test_broker_tick_populates_exposition(monkeypatch):
 
 @pytest.fixture()
 def metrics_port(monkeypatch):
-    monkeypatch.setattr(stream, "collect", lambda: {"rows": [_row("busy")], "prom": {"rc_connected": "1"}})
+    monkeypatch.setattr(stream, "collect",
+                        lambda: {"rows": [_row("busy")], "prom": {"rc_connected": "1"}, "cc_session": True})
     broker = stream.Broker(1)
     broker.start()  # primes one tick -> exposition populated before first request
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), server._handler(server._Cache(3), broker))
