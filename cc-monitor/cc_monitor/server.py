@@ -56,7 +56,7 @@ def _handler(cache: _Cache):
                 try:
                     self._fail()
                 except (BrokenPipeError, ConnectionResetError):
-                    pass
+                    pass  # client already gone while sending the error page — nothing to do
 
         def _fail(self):
             msg = b"cc-monitor: internal error (see server log)"  # never echo the exception

@@ -113,7 +113,7 @@ def parse(path: str, full: bool = True) -> dict:
                         "cache_creation_input_tokens", 0
                     )
     except OSError:
-        pass
+        pass  # transcript rotated/vanished mid-read — return what we parsed so far (stat taken up front)
     return {
         "model": last_model,
         "ctx": _ctx_of(last_usage) if last_usage else 0,

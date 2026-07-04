@@ -22,5 +22,5 @@ def read(ccsession_dir: str | None = None) -> dict:
                     key, val = line.strip().split("=", 1)
                     prom[key] = val
     except OSError:
-        pass
+        pass  # claude.prom absent (no cc-session on this host) — header just omits its fields
     return prom
