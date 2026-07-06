@@ -26,11 +26,11 @@ jobs:
       cc-monitor: ${{ steps.filter.outputs.cc-monitor }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: filter
-        uses: dorny/paths-filter@6852f92c20ea7fd3b0c25de3b5112db3a98da050  # v3
+        uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590  # v3
         with:
           filters: |
             backup-verification:
@@ -53,10 +53,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - run: pip install ruff==0.6.9
@@ -77,10 +77,10 @@ jobs:
       run:
         working-directory: backup-verification
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -96,7 +96,7 @@ jobs:
             --junitxml=junit.xml
       - name: Upload coverage artifact
         if: always() && matrix.python == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-backup-verification
           path: backup-verification/coverage.xml
@@ -121,10 +121,10 @@ jobs:
       run:
         working-directory: rclone-migrate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -145,7 +145,7 @@ jobs:
             --junitxml=junit.xml
       - name: Upload coverage artifact
         if: always() && matrix.python == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-rclone-migrate
           path: rclone-migrate/coverage.xml
@@ -172,10 +172,10 @@ jobs:
       run:
         working-directory: cc-monitor
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python }}
           cache: pip
@@ -191,7 +191,7 @@ jobs:
             --junitxml=junit.xml
       - name: Upload coverage artifact
         if: always() && matrix.python == '3.14'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-cc-monitor
           path: cc-monitor/coverage.xml
@@ -211,7 +211,7 @@ jobs:
       run:
         working-directory: cc-session
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Install zsh, tmux, bats (Linux)
@@ -248,7 +248,7 @@ jobs:
       run:
         working-directory: rclone-migrate
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Toolchain (system python3 + rclone)
