@@ -11,6 +11,8 @@ StartLimitBurst=5
 
 [Service]
 Type=simple
+# Optional textfile metrics target; empty (unset in install/.env) = disabled. See .env.example.
+Environment=CC_MONITOR_METRICS_FILE=__METRICS_FILE__
 ExecStart=__CCMONITOR_BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
 Restart=on-failure
 RestartSec=5
