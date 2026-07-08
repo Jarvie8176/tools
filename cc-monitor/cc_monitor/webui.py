@@ -8,6 +8,10 @@ curl / no-JS). Free-text (title/prompts) is redacted server-side in the payload 
 ``redact_default`` is on, so the client only ever displays what it is allowed to — there is no
 raw text to leak here. All dynamic text is written via ``textContent`` / ``createElement`` (never
 ``innerHTML``), so a hostile session name/prompt cannot inject markup.
+
+Session provenance is shown per row (``origin`` = cc-session-managed / rc-env-spawned /
+individual-cli, plus a bridged marker) and can group the table; a reconciliation strip surfaces the
+falloff across the independent population signals (registry vs .url ledger vs the unreliable scrape).
 """
 from __future__ import annotations
 
@@ -26,6 +30,9 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  input,select{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 8px;font:inherit;font-size:12px}
  #conn{font-size:11px;padding:2px 8px;border-radius:10px}
  .up{background:#12261a;color:#3fb950}.down{background:#2d1618;color:#e5534b}
+ #recon{display:flex;gap:6px;flex-wrap:wrap;margin:6px 0;font-size:11px}
+ #recon .chip{background:#161b22;border:1px solid #30363d;border-radius:10px;padding:2px 8px}
+ #recon .chip b{color:#c9d1d9} #recon .drift{border-color:#8a5a1a;color:#d9a441}
  table{border-collapse:collapse;width:100%;margin-top:8px}
  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d;font-size:13px;white-space:nowrap}
  th{color:#8b949e;font-weight:600;cursor:pointer;user-select:none}
@@ -34,11 +41,14 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  .barwrap{display:inline-block;width:110px;height:8px;background:#21262d;border-radius:4px;vertical-align:middle}
  .bar{height:8px;border-radius:4px}
  tr.busy td:first-child{border-left:2px solid #3fb950}
+ tr.grouptop td{border-top:2px solid #30363d}
  .dim{opacity:.4}
+ .badge{font-size:10px;border:1px solid #30363d;border-radius:4px;padding:0 4px;color:#8b949e}
  footer{margin-top:10px}
 </style>
 <h1>cc-monitor <span class=small id=meta></span></h1>
 <div class=small id=header></div>
+<div id=recon></div>
 <div class=bar-row>
  <span id=conn class=down>connecting…</span>
  <input id=filter placeholder="filter name / title / prompt / model / uuid" size=34>
@@ -50,33 +60,36 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
    <option value=name>name</option>
   </select>
  </label>
- <label class=small><input type=checkbox id=groupbridge> group bridged</label>
+ <label class=small><input type=checkbox id=grouporigin> group by origin</label>
  <span class=small id=count></span>
 </div>
 <table>
  <thead><tr>
-  <th data-sort=default>status</th><th>uuid8</th><th>name</th><th class=wrap>title</th>
-  <th class=wrap>initial-prompt</th><th class=wrap>last-prompt</th><th>model</th><th>s-effort</th>
+  <th data-sort=default>status</th><th>uuid8</th><th>name</th><th data-sort=origin>origin</th>
+  <th class=wrap>title</th><th class=wrap>initial-prompt</th><th class=wrap>last-prompt</th>
+  <th>model</th><th>s-effort</th>
   <th data-sort=context>context</th><th>cum in/out</th><th data-sort=idle>idle</th><th>bridge</th>
  </tr></thead>
  <tbody id=rows></tbody>
 </table>
 <footer class=small>
  ● busy = generating / ◐ active = registered, reachable / ⚠ orphaned = present but not reachable
- &nbsp;|&nbsp; title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session
- &nbsp;|&nbsp; initial-prompt = opening turn (stable) / last-prompt = latest (volatile)
- &nbsp;|&nbsp; context = input-side (#27361-safe); window "?" = env unreadable
- &nbsp;|&nbsp; idle ticks locally from last activity
+ &nbsp;|&nbsp; origin: mgd = cc-session-managed (.url ledger) · env = rc-env-spawned (sdk-cli) · cli = individual-cli; ·b = cloud-bridged
+ &nbsp;|&nbsp; recon strip = population falloff; scraped is the UNRELIABLE tmux count (drift vs registry is the tell)
+ &nbsp;|&nbsp; title "— (cloud-side)" = env-spawned GUI session &nbsp;|&nbsp; idle ticks locally from last activity
 </footer>
 <script>
 "use strict";
-// --- formatting (mirrors render.py: fmt_k / short_model / _idle / title_of / glyph) -------------
+// --- formatting (mirrors render.py: fmt_k / short_model / _idle / title_of / glyph / origin) -----
 const WARN = {warn: 70, crit: 85};                 // ctx colour thresholds; refreshed from /api/config
+const ORIGIN_ABBR = {"cc-session-managed": "mgd", "rc-env-spawned": "env", "individual-cli": "cli"};
+const ORIGIN_ORDER = ["cc-session-managed", "rc-env-spawned", "individual-cli"];
 function fmtK(n){ n = n||0;
   if (n >= 1e6) return (n/1e6).toFixed(1)+"M";
   return n >= 1000 ? (n/1000).toFixed(1)+"k" : String(n); }
 function shortModel(m){ return (m||"-").replace("claude-",""); }
 function fmtIdle(s){ s = Math.max(0, Math.floor(s)); return s < 3600 ? s+"s" : Math.floor(s/60)+"m"; }
+function originAbbr(o){ return ORIGIN_ABBR[o] || "?"; }
 function titleOf(r){                                // override > custom-title > cloud-side
   if (r.override_title) return {t: r.override_title, src: "override"};
   if (r.custom_title)   return {t: r.custom_title,   src: "custom"};
@@ -94,9 +107,10 @@ function cell(tr, cls){ const td = document.createElement("td"); if (cls) td.cla
 function mkRow(){
   const tr = document.createElement("tr");
   tr._c = {
-    status: cell(tr), u8: cell(tr, "mono"), name: cell(tr, "mono small"), title: cell(tr, "wrap"),
-    initp: cell(tr, "mono small dim"), lastp: cell(tr, "mono small dim"), model: cell(tr, "mono"),
-    seff: cell(tr), ctx: cell(tr), cum: cell(tr, "mono"), idle: cell(tr), bridge: cell(tr, "mono small"),
+    status: cell(tr), u8: cell(tr, "mono"), name: cell(tr, "mono small"), origin: cell(tr, "small"),
+    title: cell(tr, "wrap"), initp: cell(tr, "mono small dim"), lastp: cell(tr, "mono small dim"),
+    model: cell(tr, "mono"), seff: cell(tr), ctx: cell(tr), cum: cell(tr, "mono"),
+    idle: cell(tr), bridge: cell(tr, "mono small"),
   };
   return tr;
 }
@@ -114,11 +128,19 @@ function paintCtx(td, r){
   lbl.textContent = " " + fmtK(r.ctx) + "/" + fmtK(win) + (r.win_certain ? "" : "?") + " (" + pct.toFixed(0) + "%)";
   td.appendChild(wrap); td.appendChild(lbl);
 }
+function paintOrigin(td, r){
+  td.textContent = "";
+  td.title = r.origin || "";
+  const b = document.createElement("span"); b.className = "badge"; b.textContent = originAbbr(r.origin);
+  td.appendChild(b);
+  if (r.bridged){ const br = document.createElement("span"); br.className = "small"; br.textContent = " ·b"; td.appendChild(br); }
+}
 function paintRow(tr, r){
   const c = tr._c, ti = titleOf(r);
   tr.className = r.status === "busy" ? "busy" : "";
   const g = c.status; g.textContent = glyph(r.status) + " " + r.status; g.style.color = statusColor(r.status);
   setText(c.u8, r.u8 || ""); setText(c.name, r.name || "-");
+  paintOrigin(c.origin, r);
   c.title.textContent = "";
   const ts = document.createElement("span");
   if (ti.t){ ts.textContent = ti.t; } else { ts.textContent = "— (cloud-side)"; ts.className = "dim"; }
@@ -148,18 +170,22 @@ function visible(){
     idle:    (a,b) => (b.last_activity_ts||0) - (a.last_activity_ts||0),   // most-recent first
     name:    (a,b) => (a.name||"").localeCompare(b.name||""),
     default: (a,b) => (a.status!=="busy") - (b.status!=="busy") || (b.last_activity_ts||0) - (a.last_activity_ts||0),
+    origin:  (a,b) => ORIGIN_ORDER.indexOf(a.origin) - ORIGIN_ORDER.indexOf(b.origin),
   }[mode] || (()=>0);
   rows = rows.slice().sort(cmp);
-  if ($("groupbridge").checked)                      // stable partition: bridged rows first
-    rows = rows.slice().sort((a,b) => (!a.bridge_id) - (!b.bridge_id));
+  if ($("grouporigin").checked && mode !== "origin")  // stable secondary partition by origin group
+    rows = rows.slice().sort((a,b) => ORIGIN_ORDER.indexOf(a.origin) - ORIGIN_ORDER.indexOf(b.origin));
   return rows;
 }
 function reconcile(){
-  const rows = visible(), keep = new Set();
+  const rows = visible(), keep = new Set(), grouping = $("grouporigin").checked;
+  let prevOrigin = null;
   rows.forEach((r, i) => {
     let tr = ROWS.get(r.session_id);
     if (!tr){ tr = mkRow(); ROWS.set(r.session_id, tr); }
     paintRow(tr, r);
+    tr.classList.toggle("grouptop", grouping && i > 0 && r.origin !== prevOrigin);  // group divider
+    prevOrigin = r.origin;
     if (tbody.children[i] !== tr) tbody.insertBefore(tr, tbody.children[i] || null);  // move into order
     keep.add(r.session_id);
   });
@@ -167,7 +193,26 @@ function reconcile(){
   $("count").textContent = rows.length + " shown / " + SESSIONS.length + " sessions";
 }
 
-// --- header (effort + cc-session RC / standalone) -----------------------------------------------
+// --- reconciliation strip + header --------------------------------------------------------------
+function chip(label, val, drift){
+  const s = document.createElement("span"); s.className = "chip" + (drift ? " drift" : "");
+  const b = document.createElement("b"); b.textContent = val;
+  s.appendChild(document.createTextNode(label + " ")); s.appendChild(b);
+  return s;
+}
+function paintRecon(rc){
+  const el = $("recon"); el.textContent = "";
+  if (!rc || rc.registry === undefined) return;
+  const reg = rc.registry;
+  const scr = rc.scraped;
+  const items = [
+    ["registry", reg, false], ["managed", rc.managed, false],
+    ["env-spawned", rc.rc_env_spawned, false], ["individual", rc.individual_cli, false],
+    ["bridged", rc.bridged, false], ["url-ledger", rc.url_ledger, rc.url_ledger !== rc.managed],
+    ["scraped", scr === undefined || scr === null ? "—" : scr, scr !== undefined && scr !== null && String(scr) !== String(reg)],
+  ];
+  for (const [label, val, drift] of items) el.appendChild(chip(label, String(val), drift));
+}
 function paintHeader(d){
   $("meta").textContent = "effort " + (d.effort || "?");
   const p = d.prom || {}, h = $("header");
@@ -182,7 +227,7 @@ function paintHeader(d){
 }
 
 // --- transport ----------------------------------------------------------------------------------
-function apply(d){ SESSIONS = d.sessions || []; paintHeader(d); reconcile(); }
+function apply(d){ SESSIONS = d.sessions || []; paintHeader(d); paintRecon(d.recon); reconcile(); }
 function setConn(up){ const e = $("conn"); e.textContent = up ? "live" : "reconnecting…"; e.className = up ? "up" : "down"; }
 function connect(){
   const es = new EventSource("/api/stream");
@@ -195,7 +240,7 @@ fetch("/api/config").then(r => r.json()).then(c => {  // pick up runtime ctx col
   if (typeof c.ctx_crit_pct === "number") WARN.crit = c.ctx_crit_pct;
 }).catch(()=>{});
 ["input","change"].forEach(ev => { $("filter").addEventListener(ev, reconcile); $("sort").addEventListener(ev, reconcile); });
-$("groupbridge").addEventListener("change", reconcile);
+$("grouporigin").addEventListener("change", reconcile);
 document.querySelectorAll("th[data-sort]").forEach(th =>
   th.addEventListener("click", () => { $("sort").value = th.dataset.sort; reconcile(); }));
 setInterval(() => { for (const [id, tr] of ROWS){ const r = SESSIONS.find(s => s.session_id === id); if (r) tickIdle(tr, r); } }, 1000);

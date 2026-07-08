@@ -66,7 +66,7 @@ class FakeClaude:
         return path
 
     def registry(self, pid, session_id, cwd, name="cc-xx", status=None, bridge=None,
-                 procstart=None, status_updated_at=None, started_at=None):
+                 procstart=None, status_updated_at=None, started_at=None, entrypoint=None):
         rec = {"pid": pid, "sessionId": session_id, "cwd": cwd, "name": name}
         if status:
             rec["status"] = status
@@ -78,8 +78,22 @@ class FakeClaude:
             rec["statusUpdatedAt"] = status_updated_at
         if started_at is not None:
             rec["startedAt"] = started_at
+        if entrypoint is not None:
+            rec["entrypoint"] = entrypoint
         with open(os.path.join(self.sessions, f"{pid}.json"), "w") as fh:
             json.dump(rec, fh)
+
+    def managed(self, uuid8s, host="tp"):
+        """Write cc-session worker ``.url`` ledger files (``claude-<host>-<uuid8>-<hash>.url``) so a
+        session's uuid8 registers as supervisor-managed."""
+        for i, u in enumerate(uuid8s):
+            open(os.path.join(self.ccsession, f"claude-{host}-{u}-{1000 + i:06x}.url"), "w").close()
+
+    def ccprom(self, mapping: dict):
+        """Write the cc-session ``claude.prom`` (key=val lines) so cc_session enrichment is present."""
+        with open(os.path.join(self.ccsession, "claude.prom"), "w") as fh:
+            for k, v in mapping.items():
+                fh.write(f"{k}={v}\n")
 
     def titles(self, mapping: dict):
         with open(self.titles_file, "w") as fh:

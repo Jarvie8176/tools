@@ -38,6 +38,7 @@ _API_FIELDS = (
     "cum_input", "cum_output", "cum_cache", "full",
     "bridge_id", "bridge_short", "custom_title", "override_title",
     "initial_prompt", "last_prompt", "session_effort",
+    "origin", "managed", "bridged",
 )
 
 
@@ -57,7 +58,7 @@ def serialize(d: dict) -> bytes:
         sessions.append(s)
     return json.dumps(
         {"sessions": sessions, "prom": d["prom"], "cc_session": d.get("cc_session", False),
-         "effort": d.get("effort")},
+         "effort": d.get("effort"), "recon": d.get("recon", {})},
         separators=(",", ":"),
     ).encode()
 
