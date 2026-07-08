@@ -28,12 +28,26 @@ SCHEMA: dict = {
     "prompt_trunc_text": (40, 4, 512),
     "title_trunc_html":  (48, 4, 512),
     "prompt_trunc_html": (70, 4, 512),
-    "redact_default":    (False, None, None),  # on -> server masks prompt+title before output (privacy.py)
+    "redact_default":    (True, None, None),  # safe-by-default: mask prompt+title before output (privacy.py)
 }
 DEFAULTS: dict = {k: v[0] for k, v in SCHEMA.items()}
 
 # ops escape hatch: env var wins over the file for these keys.
 _ENV = {"busy_idle_gap": "CC_MONITOR_BUSY_IDLE_GAP"}
+
+# Per-invocation CLI overrides (e.g. `--redact` / `--no-redact`) — the HIGHEST-precedence layer,
+# applied on top of file+env in load(). Set once at process start from the CLI; NEVER persisted to
+# the config file (save() only touches file-backed keys). A single dict, replaced wholesale so a
+# concurrent reader sees the old map or the new one, never a partial update.
+_overrides: dict = {}
+
+
+def set_overrides(**kw) -> None:
+    """Install per-invocation overrides (drop None-valued keys so an unset flag is a no-op)."""
+    global _overrides
+    _overrides = {k: v for k, v in kw.items() if v is not None and k in SCHEMA}
+    _cache[0] = None  # invalidate: a cached effective config predates these overrides
+
 
 # Cache as a one-slot holder whose element is a SINGLE (key, value) tuple — NOT a two-field dict.
 # A dict update (`_cache["key"], _cache["value"] = ...`) is two separate stores, so a concurrent
@@ -87,6 +101,8 @@ def load(path: str | None = None) -> dict:
     for k, env in _ENV.items():  # env overrides the file (ops hard override)
         if os.environ.get(env) is not None:
             cfg[k] = _coerce(k, os.environ[env])
+    for k, v in _overrides.items():  # per-invocation CLI override — highest precedence, not persisted
+        cfg[k] = _coerce(k, v)
     _cache[0] = (key, cfg)  # single atomic store
     return dict(cfg)
 
