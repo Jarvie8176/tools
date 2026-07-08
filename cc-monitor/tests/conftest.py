@@ -6,7 +6,18 @@ import os
 
 import pytest
 
-from cc_monitor import paths
+from cc_monitor import config, paths
+
+
+@pytest.fixture(autouse=True)
+def _reset_config_state():
+    """Per-invocation config globals (CLI overrides + effective cache) must not leak across tests —
+    a `--redact`/`--no-redact` CLI test would otherwise pin redaction on/off for later tests."""
+    config._overrides = {}
+    config._cache[0] = None
+    yield
+    config._overrides = {}
+    config._cache[0] = None
 
 
 class FakeClaude:
