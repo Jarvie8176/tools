@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config
+from . import config, webui
 from .collect import collect
 from .otel_sink import OtelSink
 from .render import render_html
@@ -61,7 +61,9 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             path = self.path.split("?", 1)[0].rstrip("/") or "/"
             try:
                 if path in ("/", "/index.html"):
-                    self._ok(cache.get(time.time()))
+                    self._ok(webui.spa_page())  # SSE-driven SPA; data via /api/stream, no reload
+                elif path in ("/legacy", "/legacy.html"):
+                    self._ok(cache.get(time.time()))  # server-rendered <meta refresh> — curl / no-JS
                 elif path == "/api/sessions":
                     self._json_bytes(broker.snapshot()[0]) if broker else self._notfound()
                 elif path == "/api/stream":
