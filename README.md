@@ -1,7 +1,7 @@
 # tools
 
-Backup verification & rclone migration tools — content-addressed,
-EXIF-aware, with persisted SQLite checksum caches.
+Content-addressed backup & migration tools, plus companions for
+running and monitoring [Claude Code](https://claude.ai/code) sessions.
 
 [![CI](https://github.com/Jarvie8176/tools/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/Jarvie8176/tools/actions/workflows/ci.yml)
 [![CodeQL](https://github.com/Jarvie8176/tools/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/Jarvie8176/tools/actions/workflows/codeql.yml)
@@ -34,6 +34,7 @@ Both tools share a common ethos:
 | **backup-verification** | Verify SD-card contents against a NAS backup, with EXIF-aware comparison modes (`smart` / `full` / `data-only`) and multi-threaded SHA-256. | [`backup-verification/`](backup-verification/) |
 | **rclone-migrate** | Safer alternative to `rclone move`: split into `copy → check → delete`, content-addressed matching, persisted hash manifests, audit log, and a check-signature gate that refuses delete if src changed mid-flight. | [`rclone-migrate/`](rclone-migrate/) |
 | **cc-session** | Persistent tmux wrapper for [Claude Code](https://claude.ai/code) — keeps `claude` running across SSH disconnects, sleeps, and devices, so the browser-side "Remote Control" bridge can drop without losing the conversation. | [`cc-session/`](cc-session/) |
+| **cc-monitor** | Standalone live dashboard for [Claude Code](https://claude.ai/code) sessions on a host — per-session model, token usage, context window, and running status, read from local `~/.claude` sources (no cc-session dependency). Requires Python 3.14. | [`cc-monitor/`](cc-monitor/) |
 
 Each sub-project has its own `README.md` with a full reference; this
 top-level README is the umbrella entry point.
@@ -72,7 +73,9 @@ wizard that generates a working TOML in one pass.
 
 These apply across both sub-projects.
 
-- **Python**: 3.9 minimum. CI tests Python 3.9 – 3.13.
+- **Python**: 3.9 minimum for `backup-verification` / `rclone-migrate`
+  (CI tests 3.9 – 3.13). `cc-monitor` requires **3.14** (free-threaded
+  build); `cc-session` is shell + tmux, no Python floor.
 - **Lint**: `ruff` from repo root. Configured narrowly for high-signal
   bug rules (`E9`, `F63`, `F7`, `F82`) — see [`ruff.toml`](ruff.toml).
 - **Tests**: `pytest` + `pytest-cov` with branch coverage, threshold

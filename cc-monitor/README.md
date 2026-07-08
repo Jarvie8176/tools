@@ -15,7 +15,7 @@ that by reading the authoritative local sources directly.
 
 | Source | Provides |
 |---|---|
-| `~/.claude/sessions/<pid>.json` | session discovery + `busy`/`idle` status + `bridgeSessionId` (covers **both** cc-session `--resume` workers and RC env-spawned workers) |
+| `~/.claude/sessions/<pid>.json` | session discovery (`pid`, `sessionId`, `procStart`, `cwd`, `name`) for **both** cc-session `--resume` workers and RC env-spawned workers. *Note: recent Claude Code versions dropped the `status`/`bridgeSessionId` fields this once read — `busy`/`idle` is now derived from `/proc` CPU activity + transcript mtime instead.* |
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
 | `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable); and the `env`-block window keys as a **fallback** beneath `/proc` — Claude Code applies them internally so they never reach `/proc/environ`, and a `claude --resume` worker's window is otherwise under-read as 200k. The fallback supplies the value but is marked certain only when the worker started at/after the settings mtime (else `?`, unless usage already proves the window) |
@@ -50,6 +50,11 @@ python3.14 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/pytest                 # run the suite
 ```
 
+> **Python 3.14 required.** The package pins `requires-python = ">=3.14"` — it
+> targets the free-threaded (`3.14t`) build for the concurrent refresh/collect
+> loop. There is no PyPI package yet; install from source. On 3.12/3.13 the
+> install fails fast at the `requires-python` gate.
+
 View a remote host's dashboard over SSH: `ssh -L 8899:127.0.0.1:8899 <host>`.
 
 ## HTTP API & metrics
@@ -73,6 +78,23 @@ it atomically each refresh (aligned with the fleet's textfile convention, not an
 The file is written `0600` (owner-only); a system collector running as **root** reads it fine. A
 non-root collector would need a wider mode — set that in the deploy that enables the export, where
 the collector's uid/gid is known.
+
+### Runtime config
+
+`serve` reads a schema-gated config each refresh, so edits apply live (no restart).
+Precedence: built-in defaults ← `~/.claude/cc-monitor-config.json` (written by `POST /api/config`)
+← env var (ops escape hatch). Writes are clamped to range, coerced to type, and atomic; a corrupt
+file falls back to defaults rather than crashing a render.
+
+| Key | Default | Range | Effect |
+|---|---|---|---|
+| `busy_idle_gap` | `12` | 1–3600 | seconds of transcript silence before a session flips to `idle` (env: `CC_MONITOR_BUSY_IDLE_GAP`) |
+| `ctx_warn_pct` | `50` | 0–100 | context-usage colour turns amber above this |
+| `ctx_crit_pct` | `80` | 0–100 | context-usage colour turns red above this |
+| `title_trunc_text` / `prompt_trunc_text` | `22` / `40` | 4–512 | text-mode truncation widths |
+| `title_trunc_html` / `prompt_trunc_html` | `48` / `70` | 4–512 | HTML-mode truncation widths |
+| `redact_default` | `false` | — | mask each session's prompt + title server-side (see Privacy) |
+| `active_gap` | `900` | 1–86400 | *reserved — defined but not yet applied* |
 
 **Privacy** — set `redact_default: true` (via `POST /api/config` or the config file) to mask each
 session's prompt **and** title to `[redacted]` server-side, across the HTML, text, and API/SSE
