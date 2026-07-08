@@ -15,7 +15,7 @@ def _row(**kw):
             "ctx": 0, "peak_ctx": 0, "win": 200000, "win_certain": True, "cum_input": 0,
             "cum_output": 0, "cum_cache": 0, "full": True, "bridge_id": "", "bridge_short": "-",
             "custom_title": "", "override_title": "", "initial_prompt": "", "last_prompt": "",
-            "mtime": 123.0, "idle_s": 5}
+            "session_effort": None, "mtime": 123.0, "idle_s": 5}
     base.update(kw)
     return base
 
@@ -36,6 +36,12 @@ def test_serialize_exposes_initial_prompt_and_effort():
     assert out["effort"] == "high"                       # global effort in the payload top-level
     s = out["sessions"][0]
     assert s["initial_prompt"] == "open the epic" and s["last_prompt"] == "step 2"
+
+
+def test_serialize_exposes_per_session_effort():
+    d = {"rows": [_row(session_effort="xhigh")], "prom": {}, "effort": "high"}
+    s = json.loads(stream.serialize(d))["sessions"][0]
+    assert s["session_effort"] == "xhigh"  # per-session effort in the payload, distinct from global
 
 
 def test_broker_version_bumps_only_on_real_change(monkeypatch):

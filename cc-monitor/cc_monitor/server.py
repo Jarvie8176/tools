@@ -11,6 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import config
 from .collect import collect
+from .otel_sink import OtelSink
 from .render import render_html
 from .stream import Broker
 
@@ -204,9 +205,14 @@ class _Server(ThreadingHTTPServer):
     request_queue_size = _BACKLOG  # stdlib default 5 -> ~1s TCP-RTO tail under connection bursts
 
 
-def serve(port: int, host: str = "127.0.0.1", refresh: int = 3) -> None:
+def serve(port: int, host: str = "127.0.0.1", refresh: int = 3,
+          otel_sink: bool = True, otel_host: str = "127.0.0.1", otel_port: int = 4318) -> None:
     cache = _Cache(refresh)
     broker = Broker(refresh)  # single collect loop feeding /api/sessions + /api/stream (SSE)
+    sink = None
+    if otel_sink:  # embedded per-session effort data plane; best-effort — a bind failure
+        sink = OtelSink(host=otel_host, port=otel_port)  # (port taken/telemetry off) just no column
+        sink.start()
     try:  # warm the parse + render caches before binding, so the first request is instant
         cache.get(time.time())
         broker.start()
@@ -214,4 +220,8 @@ def serve(port: int, host: str = "127.0.0.1", refresh: int = 3) -> None:
         log.exception("cc-monitor initial warm failed")
     httpd = _Server((host, port), _handler(cache, broker))
     print(f"cc-monitor serving on http://{host}:{port}  (Ctrl-C to stop)")
-    httpd.serve_forever()
+    try:
+        httpd.serve_forever()
+    finally:
+        if sink is not None:
+            sink.stop()

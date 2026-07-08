@@ -61,7 +61,7 @@ def render_text(d: dict) -> str:
     lines.append("-" * 92)
     pw = cfg["prompt_trunc_text"]
     lines.append(
-        f" {'ST':2s} {'UUID8':8s} {'NAME':6s} {'MODEL':11s} {'CONTEXT':>14s} "
+        f" {'ST':2s} {'UUID8':8s} {'NAME':6s} {'MODEL':11s} {'EFF':6s} {'CONTEXT':>14s} "
         f"{'CUM i/o':>12s} {'IDLE':>5s}  {'TITLE':22s} {'INIT-PROMPT'.ljust(pw)} LAST-PROMPT"
     )
     lines.append("-" * 150)
@@ -78,9 +78,10 @@ def render_text(d: dict) -> str:
         title = trunc(title, cfg["title_trunc_text"]) if title else "—"
         initp = (trunc(privacy.redact(r.get("initial_prompt"), redact_on), pw) or "—").ljust(pw)
         lastp = trunc(privacy.redact(r["last_prompt"], redact_on), pw) or "—"
+        seff = trunc(r.get("session_effort") or "·", 6)  # per-session effort (OTel); '·' = no data
         lines.append(
             f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {short_model(r['model']):11s} "
-            f"{ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
+            f"{seff:6s} {ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
             f"{title:22s} {initp} {lastp}"
         )
     lines.append("-" * 150)
@@ -92,7 +93,8 @@ def render_text(d: dict) -> str:
     lines.append(
         " ctx = input-side (#27361-safe). window = worker environ [1m] rule + peak lower-bound;"
         " '?' = env unreadable. INIT-PROMPT = opening user turn (stable); LAST-PROMPT = last user"
-        " turn (volatile). effort = CLI settings.json effortLevel (global; '?' = unreadable)."
+        " turn (volatile). header effort = settings.json effortLevel (global; '?' = unreadable);"
+        " EFF col = per-session effort from OTel (latest request; '·' = telemetry off/no data)."
     )
     return "\n".join(lines)
 
@@ -117,6 +119,9 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     name = _html.escape(_clean(str(r["name"])))
     model = _html.escape(short_model(r["model"]))
     bridge = _html.escape(_clean(str(r["bridge_short"])))
+    seff = r.get("session_effort")
+    seff_html = (f"<span class=mono>{_html.escape(trunc(seff, 8))}</span>" if seff
+                 else "<span class=small style='opacity:.4'>·</span>")
     return (
         f"<tr><td><span style='color:{stat_c}'>● {_html.escape(r['status'])}</span></td>"
         f"<td class=mono>{_html.escape(r['u8'])}</td><td class='mono small'>{name}</td>"
@@ -124,6 +129,7 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
         f"<td class='mono small' style='color:#7d8590'>{initp}</td>"
         f"<td class='mono small' style='color:#7d8590'>{lastp}</td>"
         f"<td class=mono>{model}</td>"
+        f"<td>{seff_html}</td>"
         f"<td><div class=barwrap><div class=bar style='width:{min(pct, 100):.0f}%;background:{color}'></div></div>"
         f" <span class=small>{fmt_k(r['ctx'])}/{winlbl} ({pct:.0f}%)</span></td>"
         f"<td class=mono>{cum}</td><td>{_idle(r['idle_s'])}</td>"
@@ -162,7 +168,7 @@ def render_html(d: dict, refresh: int = 3) -> str:
 <h1>cc-monitor &nbsp;<span class=small>{_ts(d['ts'])} &middot; auto-refresh {refresh}s &middot; effort {effort}</span></h1>
 <div class=small>{header}</div>
 <table>
-<tr><th>status</th><th>uuid8</th><th>name</th><th>title</th><th>initial-prompt</th><th>last-prompt</th><th>model</th>
+<tr><th>status</th><th>uuid8</th><th>name</th><th>title</th><th>initial-prompt</th><th>last-prompt</th><th>model</th><th>s-effort</th>
     <th>context (input-side, #27361-safe)</th><th>cum in/out</th><th>idle</th><th>bridge (cloud)</th></tr>
 {rows}
 </table>
@@ -170,6 +176,6 @@ def render_html(d: dict, refresh: int = 3) -> str:
  ● busy / ○ idle = registry status (env workers via mtime) / ⚠ orphaned = present but not reachable &nbsp;|&nbsp;
  title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  initial-prompt = opening user turn (stable) / last-prompt = latest (volatile) &nbsp;|&nbsp;
- effort = CLI settings.json effortLevel (global; "?" = unreadable) &nbsp;|&nbsp;
+ header effort = settings.json effortLevel (global; "?" = unreadable); s-effort = per-session effort from OTel (latest request; "·" = telemetry off/no data) &nbsp;|&nbsp;
  window = worker environ [1m] rule + peak lower-bound; "?" = env unreadable</div>
 """

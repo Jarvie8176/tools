@@ -11,7 +11,7 @@ import json
 import os
 import time
 
-from . import ccsession, config, paths, settings, titles, transcript, window
+from . import ccsession, config, otel, paths, settings, titles, transcript, window
 
 # Parse cache keyed by path -> ((mtime, size), result). Transcripts are read fully to compute the
 # peak-context high-water-mark, and the live set can be hundreds of MB; without this, the server
@@ -103,6 +103,10 @@ def collect(now: float | None = None) -> dict:
     # so we only TRUST the fallback for workers that started at/after this mtime (window.resolve).
     settings_env = settings.model_env()
     settings_mtime = settings.file_mtime()
+    # Per-session OTel rollup (effort/cost/tokens keyed by session_id) — None when telemetry is off
+    # or the sink never wrote. Read once; join per row. Absent -> per-session effort column stays
+    # blank and the GLOBAL settings effortLevel header still shows (optional enrichment, like prom).
+    otel_map = otel.read()
     rows = []
     seen_paths = set()
     for reg_path in glob.glob(os.path.join(paths.SESSIONS_DIR, "*.json")):
@@ -153,6 +157,10 @@ def collect(now: float | None = None) -> dict:
             "win": win, "win_certain": win_certain,
             "override_title": titles.resolve(overrides, sid, bridge),
         })
+        # per-session effort from the OTel sidecar (this session's own requests), distinct from the
+        # global settings effortLevel header. None when telemetry is off or this sid hasn't emitted.
+        detail = otel_map.get(sid) if otel_map else None
+        info["session_effort"] = detail.get("effort") if isinstance(detail, dict) else None
         rows.append(info)
     rows.sort(key=lambda r: (r["status"] != "busy", -r.get("mtime", 0)))
     for dead in [p for p in _PARSE_CACHE if p not in seen_paths]:  # bound cache to live sessions

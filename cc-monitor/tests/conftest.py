@@ -22,6 +22,7 @@ class FakeClaude:
             os.makedirs(d, exist_ok=True)
         self.titles_file = os.path.join(root, "titles.json")
         self.settings_file = os.path.join(root, "settings.json")
+        self.otel_file = os.path.join(root, "cc-monitor-otel.json")
 
     def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
         d = os.path.join(self.proc, str(pid))
@@ -68,6 +69,11 @@ class FakeClaude:
         with open(self.settings_file, "w") as fh:
             json.dump(mapping, fh)
 
+    def otel(self, mapping: dict):
+        """Write the per-session OTel sidecar directly (session_id -> detail) for join tests."""
+        with open(self.otel_file, "w") as fh:
+            json.dump(mapping, fh)
+
 
 @pytest.fixture
 def claude(tmp_path, monkeypatch):
@@ -80,6 +86,9 @@ def claude(tmp_path, monkeypatch):
     # Point at a fake (absent) settings.json so effort reads are hermetic — a test opts in by
     # calling fc.settings({...}); default is unreadable -> effort None (no real ~/.claude read).
     monkeypatch.setattr(paths, "SETTINGS_FILE", fc.settings_file)
+    # Point at a fake (absent) OTel sidecar so per-session effort reads are hermetic — a test opts
+    # in via fc.otel({...}); default is absent -> otel.read() None -> no s-effort column.
+    monkeypatch.setattr(paths, "OTEL_FILE", fc.otel_file)
     return fc
 
 

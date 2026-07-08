@@ -129,6 +129,32 @@ def test_collect_surfaces_initial_prompt_per_row(claude):
     assert row["initial_prompt"] == "open the epic" and row["last_prompt"] == "keep going"
 
 
+def test_collect_joins_per_session_effort_from_sidecar(claude):
+    claude.registry(720, "sid-otel", "/home/x/p")
+    claude.proc_alive(720, {})
+    claude.transcript("sid-otel", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    claude.otel({"sid-otel": {"effort": "xhigh", "model": "claude-opus-4-8"}})
+    row = collect.collect()["rows"][0]
+    assert row["session_effort"] == "xhigh"
+
+
+def test_collect_session_effort_none_when_no_sidecar(claude):
+    # sidecar absent (telemetry off) -> per-session effort None; global header effort still applies
+    claude.registry(721, "u", "/home/x/p")
+    claude.proc_alive(721, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    assert collect.collect()["rows"][0]["session_effort"] is None
+
+
+def test_collect_session_effort_none_for_unmatched_session(claude):
+    # sidecar has a DIFFERENT (stale/ended) session -> the live row joins to nothing, stays None
+    claude.registry(722, "live-sid", "/home/x/p")
+    claude.proc_alive(722, {})
+    claude.transcript("live-sid", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    claude.otel({"other-ended-sid": {"effort": "high"}})
+    assert collect.collect()["rows"][0]["session_effort"] is None
+
+
 def test_pid_reuse_skipped_via_procstart(claude):
     # registry says the process started at tick 999, but the live PID started at 111 -> reused
     claude.registry(808, "u", "/home/x/p", procstart="999")
