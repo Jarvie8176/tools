@@ -1,5 +1,6 @@
 """Incremental parse: extending a prior parse with only the appended bytes must be identical to a
 full re-parse, and must fall back to a full parse when the append-only invariant breaks."""
+import json
 import time
 
 from cc_monitor import collect, transcript
@@ -77,21 +78,50 @@ def test_incremental_falls_back_on_shrink(claude):
     assert inc["last_prompt"] == ""       # old prompts gone, not carried over
 
 
-def test_incremental_leaves_trailing_partial_line(claude):
-    # a mid-write transcript can end without a trailing newline; the partial line must be left
-    # unconsumed (offset not advanced past it) and folded once its newline lands.
+def test_final_record_without_newline_is_folded(claude):
+    # regression (audit #105): a COMPLETE JSONL record at EOF with no trailing newline must still
+    # be parsed — the newline is a separator, not a completeness marker. A process that writes the
+    # JSON then exits before the newline would otherwise make that turn permanently invisible.
+    path = claude.transcript("s1", "/p", [assistant("claude-opus-4-8", inp=100)])
+    prev = transcript.parse(path)                       # this file ends with a newline
+    with open(path, "a") as fh:                          # append a full record, deliberately no "\n"
+        fh.write(json.dumps(assistant("claude-sonnet-5", inp=777)))
+    full = transcript.parse(path)                        # cold parse must see the newline-less record
+    assert full["ctx"] == 777 and full["model"] == "claude-sonnet-5"
+    inc = transcript.parse_incremental(path, prev)       # incremental folds it too, and matches
+    assert inc["ctx"] == 777
+    _same(inc, full)
+
+
+def test_incremental_leaves_genuinely_partial_line(claude):
+    # a mid-write transcript can end with an INCOMPLETE JSON record (bytes still landing); that is
+    # left unconsumed (offset not advanced) and folded once the record becomes valid JSON.
     path = claude.transcript("s1", "/p", [assistant("claude-opus-4-8", inp=100)])
     prev = transcript.parse(path)
-    claude.append(path, [assistant("claude-opus-4-8", inp=999)], newline=False)  # partial
+    with open(path, "ab") as fh:                 # truncated JSON — no closing braces, no newline
+        fh.write(b'{"type":"assistant","message":{"model":"x","usage":{"input_tokens":999')
     mid = transcript.parse_incremental(path, prev)
-    assert mid["ctx"] == 100                    # partial turn not yet folded
-    assert mid["_offset"] == prev["_offset"]    # cursor held at the last complete line
-    # now the newline arrives (the writer finishes the line)
-    with open(path, "a") as fh:
-        fh.write("\n")
+    assert mid["ctx"] == 100                     # invalid-JSON tail not folded
+    assert mid["_offset"] == prev["_offset"]     # cursor held at the last complete record
+    with open(path, "ab") as fh:                 # the writer finishes the record
+        fh.write(b"}}}\n")
     done = transcript.parse_incremental(path, mid)
-    assert done["ctx"] == 999                   # now folded
+    assert done["ctx"] == 999                     # now a complete record — folded
     _same(done, transcript.parse(path))
+
+
+def test_incremental_falls_back_on_inplace_rewrite_to_larger(claude):
+    # regression (audit #105): a same-inode truncate+rewrite to a LARGER file passes the size>=prev
+    # check but is NOT an append — the boundary byte the prior parse stopped on has changed, so the
+    # stale accumulator (old model/ctx/peak) must be discarded and the file fully re-parsed.
+    path = claude.transcript("s1", "/p", [assistant("old-model", inp=500)])
+    prev = transcript.parse(path)
+    with open(path, "w") as fh:                   # overwrite in place, larger than before
+        fh.write(json.dumps(assistant("new-model", inp=42)) + "\n" + " " * 200)
+    inc = transcript.parse_incremental(path, prev)
+    full = transcript.parse(path)
+    _same(inc, full)
+    assert inc["model"] == "new-model" and inc["ctx"] == 42 and inc["peak_ctx"] == 42  # no old bleed
 
 
 def test_incremental_full_flag_and_cum_capped_when_no_prev(claude):

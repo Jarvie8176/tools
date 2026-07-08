@@ -24,11 +24,10 @@ _PARSE_CACHE: dict = {}
 
 def _row(result: dict) -> dict:
     """A caller-owned copy of a parse result. Copy because the caller mutates it via `info.update`
-    and must not touch the cache; drop the internal `_offset` resume cursor so it never leaks into
-    a dashboard row or the /api JSON (the cache keeps it)."""
-    row = dict(result)
-    row.pop("_offset", None)
-    return row
+    and must not touch the cache; drop the internal resume-cursor fields (``_offset``/``_dev``/
+    ``_ino``/``_boundary``) so they never leak into a dashboard row or the /api JSON (cache keeps
+    them). Also keeps a raw ``bytes`` boundary out of the JSON-serialised payload."""
+    return {k: v for k, v in result.items() if not k.startswith("_")}
 
 
 def _parse_cached(path: str) -> dict:
