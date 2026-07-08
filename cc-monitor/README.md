@@ -16,8 +16,9 @@ that by reading the authoritative local sources directly.
 | Source | Provides |
 |---|---|
 | `~/.claude/sessions/<pid>.json` | session discovery + `busy`/`idle` status + `bridgeSessionId` (covers **both** cc-session `--resume` workers and RC env-spawned workers) |
-| `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, last prompt |
+| `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
+| `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable) |
 | `/tmp/cc-session/claude.prom` | **optional** cc-session supervisor health (header only; absent → standalone view) |
 
 ## Usage

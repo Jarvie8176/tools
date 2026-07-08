@@ -71,3 +71,43 @@ def test_read_model_env_excludes_default_headers(claude):
     env = window.read_model_env(4243)
     assert "ANTHROPIC_DEFAULT_HEADERS" not in env  # prefix match would have captured this
     assert env == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+
+
+# --- merge_model_env: settings.json env-block fallback beneath /proc environ ---
+
+def test_merge_resume_worker_gets_1m_from_settings():
+    # the bug: `claude --resume` proc env lacks the [1m] key (settings.json env is applied
+    # internally, not in /proc) — the settings block must supply it so the window resolves to 1M.
+    proc = {}  # readable but empty (resume worker's exec env)
+    settings_env = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    merged = window.merge_model_env(proc, settings_env)
+    assert window.resolve_window(merged, "claude-opus-4-8", 61_000) == (1_000_000, True)
+
+
+def test_merge_proc_override_wins_over_settings():
+    # a spawner-injected proc value is authoritative and wins per key over the settings default
+    proc = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "300000"}
+    settings_env = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    merged = window.merge_model_env(proc, settings_env)
+    assert window.resolve_window(merged, "claude-opus-4-8", 10_000) == (300_000, True)
+
+
+def test_merge_both_empty_is_none_preserving_uncertain():
+    # no proc env AND no settings signal -> None -> resolve_window keeps its '?' (uncertain) path
+    assert window.merge_model_env(None, {}) is None
+    assert window.merge_model_env(None, None) is None
+    assert window.resolve_window(window.merge_model_env(None, {}), "claude-opus-4-8", 100_000) \
+        == (200_000, False)
+
+
+def test_merge_proc_unreadable_falls_back_to_settings():
+    # /proc unreadable (None) but settings has [1m] -> still resolvable with certainty
+    merged = window.merge_model_env(None, {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
+    assert window.resolve_window(merged, "claude-opus-4-8", 50_000) == (1_000_000, True)
+
+
+def test_merge_readable_empty_proc_no_settings_stays_certain_200k():
+    # observed the env, found no override, and no global default either -> 200k is a certain answer
+    merged = window.merge_model_env({}, {})
+    assert merged == {}  # dict, not None: we DID read the env
+    assert window.resolve_window(merged, "claude-opus-4-8", 150_000) == (200_000, True)

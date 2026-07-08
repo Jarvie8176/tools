@@ -22,7 +22,9 @@ BASELINE = 200_000
 ONE_M = 1_000_000
 _1M_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 # Exact keys only — a prefix match would also capture ANTHROPIC_DEFAULT_HEADERS (auth headers).
-_WANTED_ENV = frozenset({
+# Public: settings.model_env() filters the settings.json `env` block by the SAME set, so the two
+# window sources (proc environ + settings env-block) stay in lockstep.
+MODEL_ENV_KEYS = frozenset({
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -47,9 +49,28 @@ def read_model_env(pid, proc_dir: str | None = None):
     env = {}
     for kv in raw.split("\0"):
         key, sep, val = kv.partition("=")
-        if sep and key in _WANTED_ENV:
+        if sep and key in MODEL_ENV_KEYS:
             env[key] = val
     return env
+
+
+def merge_model_env(proc_env: dict | None, settings_env: dict | None):
+    """Overlay the worker's exec-time ``/proc`` env on the settings.json ``env``-block defaults.
+
+    The settings.json ``env`` block (e.g. ``ANTHROPIC_DEFAULT_OPUS_MODEL=…[1m]``) is applied
+    INTERNALLY by Claude Code to every session, so it never appears in ``/proc/<pid>/environ`` — a
+    ``claude --resume`` worker launched from a plain shell has an empty model env THERE yet still
+    runs at the settings-configured window. Reading ``/proc`` alone under-reports such a worker as
+    200k (and, worse, marks it certain). Here ``proc`` (a spawner override, authoritative when
+    present) wins per key; ``settings`` fills only the keys ``proc`` lacks.
+
+    Returns ``None`` only when ``/proc`` was unreadable AND ``settings`` had nothing — the one case
+    the window is still locally unknowable, which :func:`resolve_window` flags ``'?'``. A readable
+    but empty ``proc`` env stays a dict (not None): we DID observe the worker's env and found no
+    override, so with an equally-empty settings block 200k is a certain answer, not a guess."""
+    if proc_env is None:
+        return dict(settings_env) if settings_env else None
+    return {**(settings_env or {}), **proc_env}
 
 
 def _family(model: str) -> str | None:

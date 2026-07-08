@@ -21,6 +21,7 @@ class FakeClaude:
         for d in (self.sessions, self.projects, self.proc, self.ccsession):
             os.makedirs(d, exist_ok=True)
         self.titles_file = os.path.join(root, "titles.json")
+        self.settings_file = os.path.join(root, "settings.json")
 
     def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
         d = os.path.join(self.proc, str(pid))
@@ -61,6 +62,10 @@ class FakeClaude:
         with open(self.titles_file, "w") as fh:
             json.dump(mapping, fh)
 
+    def settings(self, mapping: dict):
+        with open(self.settings_file, "w") as fh:
+            json.dump(mapping, fh)
+
 
 @pytest.fixture
 def claude(tmp_path, monkeypatch):
@@ -70,6 +75,9 @@ def claude(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PROC_DIR", fc.proc)
     monkeypatch.setattr(paths, "CCSESSION_DIR", fc.ccsession)
     monkeypatch.setattr(paths, "TITLES_FILE", fc.titles_file)
+    # Point at a fake (absent) settings.json so effort reads are hermetic — a test opts in by
+    # calling fc.settings({...}); default is unreadable -> effort None (no real ~/.claude read).
+    monkeypatch.setattr(paths, "SETTINGS_FILE", fc.settings_file)
     return fc
 
 

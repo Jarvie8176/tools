@@ -6,6 +6,10 @@ import os
 CLAUDE_HOME = os.path.expanduser(os.environ.get("CC_MONITOR_CLAUDE_HOME", "~/.claude"))
 PROJECTS_DIR = os.path.join(CLAUDE_HOME, "projects")
 SESSIONS_DIR = os.path.join(CLAUDE_HOME, "sessions")
+# Claude Code's own settings.json — read ONLY for the display-safe effortLevel (see settings.py).
+SETTINGS_FILE = os.path.expanduser(
+    os.environ.get("CC_MONITOR_SETTINGS", os.path.join(CLAUDE_HOME, "settings.json"))
+)
 TITLES_FILE = os.path.expanduser(
     os.environ.get("CC_MONITOR_TITLES", os.path.join(CLAUDE_HOME, "cc-monitor-titles.json"))
 )

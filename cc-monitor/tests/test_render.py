@@ -43,6 +43,33 @@ def test_standalone_omits_cc_session_header_no_misleading_rc_down():
     assert "cc-session RC" not in html and "standalone" in html
 
 
+def test_effort_shown_in_headers():
+    d = {"ts": 0, "prom": {}, "rows": [], "effort": "high"}
+    assert "effort:high" in render.render_text(d)
+    assert "effort high" in render.render_html(d)
+
+
+def test_effort_unknown_renders_placeholder():
+    # effort absent (settings unreadable) -> '?' placeholder, not a crash or "None"
+    d = {"ts": 0, "prom": {}, "rows": []}
+    assert "effort:?" in render.render_text(d)
+    assert "effort ?" in render.render_html(d)
+
+
+def test_initial_prompt_rendered_in_row():
+    row = {"ctx": 0, "win": 100000, "win_certain": True, "status": "idle", "cum_input": 0,
+           "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
+           "bridge_short": "-", "u8": "abcd1234", "last_prompt": "later turn",
+           "initial_prompt": "opening turn", "override_title": "", "custom_title": ""}
+    html = render._row_html(row, config_defaults())
+    assert "opening turn" in html and "later turn" in html
+
+
+def config_defaults():
+    from cc_monitor import config
+    return config.DEFAULTS
+
+
 def test_cc_session_header_shown_when_supervisor_present():
     d = {"ts": 0, "rows": [], "cc_session": True,
          "prom": {"rc_connected": "1", "auth_healthy": "1", "workers": "3", "capacity": "8"}}

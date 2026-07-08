@@ -41,6 +41,27 @@ def test_custom_title_and_last_prompt_separate(claude):
     info = transcript.parse(path)
     assert info["custom_title"] == "Photo pipeline migration"
     assert info["last_prompt"] == "go P2"  # last, not first
+    assert info["initial_prompt"] == "first prompt"  # opening turn, kept as identity
+
+
+def test_initial_prompt_is_first_human_turn(claude):
+    # initial_prompt is the FIRST genuine human prompt and does not drift as the session continues;
+    # envelopes/tool turns before it are skipped just like last_prompt.
+    path = claude.transcript("s1", "/p", [
+        user([{"type": "tool_result", "content": "x"}]),
+        user("<system-reminder>noise</system-reminder>"),
+        user("what is the plan"),
+        assistant("claude-opus-4-8", inp=100),
+        user("now do step 2"),
+    ])
+    info = transcript.parse(path)
+    assert info["initial_prompt"] == "what is the plan"
+    assert info["last_prompt"] == "now do step 2"
+
+
+def test_initial_prompt_empty_when_no_human_turn(claude):
+    path = claude.transcript("s1", "/p", [assistant("claude-opus-4-8", inp=10)])
+    assert transcript.parse(path)["initial_prompt"] == ""
 
 
 def test_last_prompt_skips_tool_envelopes(claude):

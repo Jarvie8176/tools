@@ -42,6 +42,27 @@ def test_window_1m_via_peak_lower_bound(claude):
     assert (row["win"], row["win_certain"]) == (1_000_000, True)
 
 
+def test_resume_worker_window_from_settings_env_not_proc(claude):
+    # regression: a `claude --resume` worker's /proc environ lacks ANTHROPIC_DEFAULT_OPUS_MODEL
+    # (settings.json env is applied internally, not in /proc). Reading /proc alone under-reported
+    # it as 200k; the settings.json env block must supply [1m] -> 1M, even below the 200k peak.
+    claude.settings({"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}})
+    claude.registry(410, "u", "/home/x/p")
+    claude.proc_alive(410, {})  # empty exec env, like a resume worker
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=61_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"]) == (1_000_000, True)
+
+
+def test_default_200k_when_no_proc_and_no_settings_1m(claude):
+    # no [1m] anywhere (proc empty, settings has no env) -> genuinely 200k, and certain
+    claude.registry(411, "u", "/home/x/p")
+    claude.proc_alive(411, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=50_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"]) == (200_000, True)
+
+
 def test_title_precedence_override_beats_custom(claude):
     claude.registry(505, "u", "/home/x/p", bridge="session_b")
     claude.proc_alive(505, {})
@@ -67,6 +88,31 @@ def test_render_smoke(claude):
     d = collect.collect()
     assert "cc-monitor" in render.render_text(d)
     assert "<table>" in render.render_html(d)
+
+
+def test_collect_surfaces_effort_from_settings(claude):
+    claude.settings({"effortLevel": "high"})
+    claude.registry(700, "u", "/home/x/p")
+    claude.proc_alive(700, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    d = collect.collect()
+    assert d["effort"] == "high"
+
+
+def test_collect_effort_none_when_no_settings(claude):
+    # no settings.json in the hermetic tree -> effort None (render shows '?')
+    d = collect.collect()
+    assert d["effort"] is None
+
+
+def test_collect_surfaces_initial_prompt_per_row(claude):
+    claude.registry(701, "u", "/home/x/p")
+    claude.proc_alive(701, {})
+    claude.transcript("u", "/home/x/p", [user("open the epic"),
+                                         assistant("claude-opus-4-8", inp=10),
+                                         user("keep going")])
+    row = collect.collect()["rows"][0]
+    assert row["initial_prompt"] == "open the epic" and row["last_prompt"] == "keep going"
 
 
 def test_pid_reuse_skipped_via_procstart(claude):

@@ -14,8 +14,8 @@ def _row(**kw):
     base = {"session_id": "s", "u8": "u", "pid": 1, "name": "n", "model": "m", "status": "idle",
             "ctx": 0, "peak_ctx": 0, "win": 200000, "win_certain": True, "cum_input": 0,
             "cum_output": 0, "cum_cache": 0, "full": True, "bridge_id": "", "bridge_short": "-",
-            "custom_title": "", "override_title": "", "last_prompt": "", "mtime": 123.0,
-            "idle_s": 5}
+            "custom_title": "", "override_title": "", "initial_prompt": "", "last_prompt": "",
+            "mtime": 123.0, "idle_s": 5}
     base.update(kw)
     return base
 
@@ -27,6 +27,15 @@ def test_serialize_uses_absolute_ts_not_ticking_idle():
     assert s["last_activity_ts"] == 999.0            # absolute — client ticks idle locally
     assert "idle_s" not in s and "mtime" not in s    # excluded so a clock tick isn't a "change"
     assert out["prom"]["workers"] == "8"
+
+
+def test_serialize_exposes_initial_prompt_and_effort():
+    d = {"rows": [_row(initial_prompt="open the epic", last_prompt="step 2")],
+         "prom": {}, "effort": "high"}
+    out = json.loads(stream.serialize(d))
+    assert out["effort"] == "high"                       # global effort in the payload top-level
+    s = out["sessions"][0]
+    assert s["initial_prompt"] == "open the epic" and s["last_prompt"] == "step 2"
 
 
 def test_broker_version_bumps_only_on_real_change(monkeypatch):
