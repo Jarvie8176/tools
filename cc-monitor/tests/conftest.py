@@ -56,6 +56,15 @@ class FakeClaude:
                 fh.write(json.dumps(ev) + "\n")
         return path
 
+    def append(self, path, events, newline=True):
+        """Append events to an existing transcript (append-only, like Claude Code). ``newline=False``
+        writes the last event WITHOUT a trailing newline to simulate a mid-write partial line."""
+        with open(path, "a") as fh:
+            for i, ev in enumerate(events):
+                last = i == len(events) - 1
+                fh.write(json.dumps(ev) + ("" if last and not newline else "\n"))
+        return path
+
     def registry(self, pid, session_id, cwd, name="cc-xx", status=None, bridge=None,
                  procstart=None, status_updated_at=None, started_at=None):
         rec = {"pid": pid, "sessionId": session_id, "cwd": cwd, "name": name}

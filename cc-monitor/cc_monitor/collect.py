@@ -13,11 +13,21 @@ import time
 
 from . import ccsession, config, otel, paths, settings, titles, transcript, window
 
-# Parse cache keyed by path -> ((mtime, size), result). Transcripts are read fully to compute the
-# peak-context high-water-mark, and the live set can be hundreds of MB; without this, the server
-# would re-stream every transcript on every refresh and pin the memory cgroup with page cache.
-# A session's parse is reused until its transcript's mtime OR size changes (i.e. it wrote a line).
+# Parse cache keyed by path -> ((mtime, size), result). The result carries an internal `_offset`
+# byte cursor: on a cache miss we extend the prior parse with only the appended bytes instead of
+# re-scanning the whole (tens-of-MB) transcript for the peak-context high-water-mark — the fold is
+# the serve loop's cost centre (a 40MB re-parse is ~0.5s vs ~ms incremental). Without any cache the
+# server would re-stream every transcript on every refresh and pin the memory cgroup with page
+# cache. A session's parse is reused until its transcript's mtime OR size changes (it wrote a line).
 _PARSE_CACHE: dict = {}
+
+
+def _row(result: dict) -> dict:
+    """A caller-owned copy of a parse result. Copy because the caller mutates it via `info.update`
+    and must not touch the cache; drop the internal resume-cursor fields (``_offset``/``_dev``/
+    ``_ino``/``_boundary``) so they never leak into a dashboard row or the /api JSON (cache keeps
+    them). Also keeps a raw ``bytes`` boundary out of the JSON-serialised payload."""
+    return {k: v for k, v in result.items() if not k.startswith("_")}
 
 
 def _parse_cached(path: str) -> dict:
@@ -28,10 +38,13 @@ def _parse_cached(path: str) -> dict:
     key = (st.st_mtime, st.st_size)
     hit = _PARSE_CACHE.get(path)
     if hit is not None and hit[0] == key:
-        return dict(hit[1])  # copy — the caller mutates (info.update) and must not touch the cache
-    result = transcript.parse(path)
+        return _row(hit[1])  # unchanged since last parse — serve from cache
+    # Miss: the transcript grew (or is new). With a prior parse of THIS path, fold only the appended
+    # bytes (append-only invariant); parse_incremental falls back to a full parse if it shrank/rotated.
+    prev = hit[1] if hit is not None else None
+    result = transcript.parse_incremental(path, prev) if prev is not None else transcript.parse(path)
     _PARSE_CACHE[path] = (key, result)
-    return dict(result)
+    return _row(result)
 
 
 def find_transcript(session_id: str, cwd: str) -> str | None:
