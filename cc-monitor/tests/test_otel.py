@@ -243,3 +243,59 @@ def test_sink_bind_failure_best_effort(tmp_path):
         assert b.start() is False  # logged + degraded, not raised
     finally:
         a.stop()
+
+
+# --- body caps: a small compressed body must not expand past the memory budget, and an oversized
+#     declared body must not desync the keep-alive socket ---
+
+def test_gunzip_bounds_output_and_drops_bomb():
+    import gzip
+    cap = otel_sink._MAX_BODY
+    payload = b'{"ok": true}'
+    assert otel_sink._gunzip(gzip.compress(payload), cap) == payload  # valid, within cap
+    bomb = gzip.compress(b"\x00" * (cap + 1024 * 1024))
+    assert len(bomb) < cap                        # the *compressed* body slips under the read cap...
+    assert otel_sink._gunzip(bomb, cap) is None    # ...but decompression is bounded -> dropped
+    assert otel_sink._gunzip(b"not gzip", cap) is None
+
+
+def test_sink_gzip_bomb_dropped_not_fatal(tmp_path):
+    import gzip
+    sink = otel_sink.OtelSink(port=0, path=str(tmp_path / "o.json"))
+    assert sink.start()
+    try:
+        port = sink._httpd.server_address[1]
+        bomb = gzip.compress(b"\x00" * (otel_sink._MAX_BODY + 1024 * 1024))
+        resp = _post(port, "/v1/logs", _chunked(bomb),
+                     {"Content-Type": "application/json", "Transfer-Encoding": "chunked",
+                      "Content-Encoding": "gzip"})
+        assert b"200" in resp.split(b"\r\n", 1)[0]   # accepted, never fatal
+        assert sink.rollup.snapshot() == {}          # bomb dropped, nothing ingested
+        # server survived the bomb: a subsequent valid gzip POST is still ingested
+        good = gzip.compress(json.dumps(log_payload(api_request("after"))).encode())
+        _post(port, "/v1/logs", _chunked(good),
+              {"Content-Type": "application/json", "Transfer-Encoding": "chunked",
+               "Content-Encoding": "gzip"})
+        assert sink.rollup.snapshot()["after"]["effort"] == "high"
+    finally:
+        sink.stop()
+
+
+def test_sink_oversized_chunk_closes_not_fatal(tmp_path):
+    sink = otel_sink.OtelSink(port=0, path=str(tmp_path / "o.json"))
+    assert sink.start()
+    try:
+        port = sink._httpd.server_address[1]
+        # a chunk-size line declaring more than the cap: the sink stops before reading the body,
+        # closes the connection (no desync), and stays alive for the next request
+        oversized = f"{otel_sink._MAX_BODY + 1:x}\r\n".encode()
+        resp = _post(port, "/v1/logs", oversized,
+                     {"Content-Type": "application/json", "Transfer-Encoding": "chunked"})
+        assert b"200" in resp.split(b"\r\n", 1)[0]
+        assert sink.rollup.snapshot() == {}
+        good = json.dumps(log_payload(api_request("ok2"))).encode()
+        _post(port, "/v1/logs", _chunked(good),
+              {"Content-Type": "application/json", "Transfer-Encoding": "chunked"})
+        assert sink.rollup.snapshot()["ok2"]["effort"] == "high"
+    finally:
+        sink.stop()

@@ -42,11 +42,17 @@ def user_text(content) -> str | None:
     return text
 
 
+def _num(v) -> int:
+    """Coerce a token field to int. A present-but-null value (a future CC version could emit a null
+    token count) must not crash the cumulative sum / context calc — ``None + int`` would raise."""
+    return v if isinstance(v, int) and not isinstance(v, bool) else 0
+
+
 def _ctx_of(usage: dict) -> int:
     return (
-        usage.get("input_tokens", 0)
-        + usage.get("cache_read_input_tokens", 0)
-        + usage.get("cache_creation_input_tokens", 0)
+        _num(usage.get("input_tokens"))
+        + _num(usage.get("cache_read_input_tokens"))
+        + _num(usage.get("cache_creation_input_tokens"))
     )
 
 
@@ -91,7 +97,10 @@ def parse(path: str, full: bool = True) -> dict:
                     kind = org.get("kind") if isinstance(org, dict) else None
                     if kind and kind != "human":
                         continue
-                    txt = user_text(ev.get("message", {}).get("content"))
+                    # message may be present-but-null / a non-dict in a malformed line — guard the
+                    # .get chain the same way `origin` is guarded above, or the whole parse crashes.
+                    m = ev.get("message")
+                    txt = user_text(m.get("content") if isinstance(m, dict) else None)
                     if txt:
                         if first_user is None:
                             first_user = txt  # opening human prompt (stable identity; keep first)
@@ -99,9 +108,11 @@ def parse(path: str, full: bool = True) -> dict:
                     continue
                 if etype != "assistant":
                     continue
-                msg = ev.get("message", {})
+                msg = ev.get("message")
+                if not isinstance(msg, dict):
+                    continue
                 usage = msg.get("usage")
-                if not usage:
+                if not isinstance(usage, dict):  # present-but-null / non-dict usage must not crash
                     continue
                 if msg.get("model") and msg["model"] != "<synthetic>":
                     last_model = msg["model"]
@@ -110,10 +121,10 @@ def parse(path: str, full: bool = True) -> dict:
                 if turn_ctx > peak_ctx:
                     peak_ctx = turn_ctx
                 if do_full:
-                    cum_input += usage.get("input_tokens", 0)
-                    cum_output += usage.get("output_tokens", 0)
-                    cum_cache += usage.get("cache_read_input_tokens", 0) + usage.get(
-                        "cache_creation_input_tokens", 0
+                    cum_input += _num(usage.get("input_tokens"))
+                    cum_output += _num(usage.get("output_tokens"))
+                    cum_cache += _num(usage.get("cache_read_input_tokens")) + _num(
+                        usage.get("cache_creation_input_tokens")
                     )
     except OSError:
         pass  # transcript rotated/vanished mid-read — return what we parsed so far (stat taken up front)

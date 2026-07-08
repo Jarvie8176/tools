@@ -23,11 +23,11 @@ and may gzip. A payload that isn't valid JSON is logged and dropped, never fatal
 """
 from __future__ import annotations
 
-import gzip
 import json
 import logging
 import os
 import threading
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import paths
@@ -166,6 +166,25 @@ class Rollup:
             return json.loads(json.dumps(self._sessions))  # deep copy for tests
 
 
+# Cap a single OTLP POST body. Loopback-only, but a runaway/buggy local exporter must not be able
+# to force an unbounded read into memory (this tool runs under a co-tenant memory budget). The cap
+# applies to the DECOMPRESSED size too — an 8 MiB gzip could otherwise expand past MemoryMax.
+_MAX_BODY = 8 * 1024 * 1024
+
+
+def _gunzip(body: bytes, cap: int) -> bytes | None:
+    """Decompress a gzip body, bounded to ``cap`` output bytes. Returns None if the payload is not
+    valid gzip or expands past the cap (a gzip bomb) — the caller drops it, never fatal."""
+    try:
+        d = zlib.decompressobj(16 + zlib.MAX_WBITS)  # 16 => gzip header
+        out = d.decompress(body, cap + 1)  # bounded output; excess stays in unconsumed_tail
+        if len(out) > cap or d.unconsumed_tail:  # would exceed the cap -> oversized, drop
+            return None
+        return out
+    except (zlib.error, OSError):
+        return None
+
+
 def _handler(rollup: Rollup):
     class _Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -176,6 +195,7 @@ def _handler(rollup: Rollup):
             chunked — no Content-Length — so a naive read returns empty; PoC-proven)."""
             if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
                 chunks = []
+                total = 0
                 while True:
                     size_line = self.rfile.readline().strip()
                     try:
@@ -185,6 +205,10 @@ def _handler(rollup: Rollup):
                     if size == 0:
                         self.rfile.readline()  # consume trailing CRLF
                         break
+                    total += size
+                    if total > _MAX_BODY:  # runaway exporter — stop; unread bytes remain on the
+                        self.close_connection = True  # socket, so close rather than desync keep-alive
+                        break
                     chunks.append(self.rfile.read(size))
                     self.rfile.readline()  # CRLF after each chunk
                 return b"".join(chunks)
@@ -192,17 +216,17 @@ def _handler(rollup: Rollup):
                 n = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 n = 0
+            if n > _MAX_BODY:  # declared larger than the cap: read the cap and close (rest unread,
+                self.close_connection = True  # would otherwise pollute the next keep-alive request)
+                n = _MAX_BODY
             return self.rfile.read(n) if n > 0 else b""
 
         def do_POST(self):  # noqa: N802 (stdlib API name)
             try:
                 body = self._read_body()
                 if (self.headers.get("Content-Encoding") or "").lower() == "gzip":
-                    try:
-                        body = gzip.decompress(body)
-                    except OSError:
-                        pass
-                if self.path.rstrip("/").endswith("/v1/logs"):
+                    body = _gunzip(body, _MAX_BODY)  # bounded; a gzip bomb -> None -> dropped below
+                if body and self.path.rstrip("/").endswith("/v1/logs"):
                     try:
                         rollup.ingest_logs(json.loads(body))
                     except ValueError:
