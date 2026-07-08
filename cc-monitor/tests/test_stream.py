@@ -11,7 +11,7 @@ from cc_monitor import server, stream
 
 
 def _row(**kw):
-    base = {"session_id": "s", "u8": "u", "pid": 1, "name": "n", "model": "m", "status": "idle",
+    base = {"session_id": "s", "u8": "u", "pid": 1, "name": "n", "model": "m", "status": "active",
             "ctx": 0, "peak_ctx": 0, "win": 200000, "win_certain": True, "cum_input": 0,
             "cum_output": 0, "cum_cache": 0, "full": True, "bridge_id": "", "bridge_short": "-",
             "custom_title": "", "override_title": "", "initial_prompt": "", "last_prompt": "",
@@ -48,8 +48,8 @@ def test_serialize_exposes_per_session_effort():
 
 
 def test_broker_version_bumps_only_on_real_change(monkeypatch):
-    seq = [{"rows": [_row(status="idle")], "prom": {}},
-           {"rows": [_row(status="idle")], "prom": {}},   # identical -> no bump
+    seq = [{"rows": [_row(status="active")], "prom": {}},
+           {"rows": [_row(status="active")], "prom": {}},   # identical -> no bump
            {"rows": [_row(status="busy")], "prom": {}}]   # changed  -> bump
     calls = {"i": 0}
 

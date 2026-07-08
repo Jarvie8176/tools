@@ -26,7 +26,7 @@ import os
 
 # Fixed status label set — always emitted (even at 0) so the series exists for alerting: a missing
 # series and a genuine zero are indistinguishable to an absence-based alert, so we never omit one.
-_STATUSES = ("busy", "idle", "orphaned")
+_STATUSES = ("busy", "active", "orphaned")
 
 
 def _fmt(v) -> str:

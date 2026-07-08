@@ -19,7 +19,7 @@ def test_ctx_colour_respects_config_thresholds():
 
     def colour(pct):
         win = 100_000
-        row = {"ctx": int(pct / 100 * win), "win": win, "win_certain": True, "status": "idle",
+        row = {"ctx": int(pct / 100 * win), "win": win, "win_certain": True, "status": "active",
                "cum_input": 0, "cum_output": 0, "full": True, "idle_s": 1, "name": "n",
                "model": "m", "bridge_short": "-", "u8": "abcd1234", "last_prompt": "",
                "override_title": "", "custom_title": ""}
@@ -27,6 +27,20 @@ def test_ctx_colour_respects_config_thresholds():
     assert "#3fb950" in colour(warn - 1)   # green
     assert "#d9a441" in colour(warn + 1)   # amber
     assert "#e5534b" in colour(crit + 1)   # red
+
+
+def test_html_status_glyph_distinguishes_active_from_busy():
+    from cc_monitor import config
+
+    def row_html(status):
+        row = {"ctx": 0, "win": 100000, "win_certain": True, "status": status, "cum_input": 0,
+               "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
+               "bridge_short": "-", "u8": "abcd1234", "last_prompt": "", "override_title": "",
+               "custom_title": ""}
+        return render._row_html(row, config.DEFAULTS)
+    assert "● busy" in row_html("busy")
+    assert "◐ active" in row_html("active") and "● active" not in row_html("active")  # not busy glyph
+    assert "⚠ orphaned" in row_html("orphaned")
 
 
 def test_html_inlines_empty_favicon_to_suppress_request():
@@ -57,7 +71,7 @@ def test_effort_unknown_renders_placeholder():
 
 
 def test_initial_prompt_rendered_in_row():
-    row = {"ctx": 0, "win": 100000, "win_certain": True, "status": "idle", "cum_input": 0,
+    row = {"ctx": 0, "win": 100000, "win_certain": True, "status": "active", "cum_input": 0,
            "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
            "bridge_short": "-", "u8": "abcd1234", "last_prompt": "later turn",
            "initial_prompt": "opening turn", "override_title": "", "custom_title": ""}
@@ -66,7 +80,7 @@ def test_initial_prompt_rendered_in_row():
 
 
 def _row(**kw):
-    base = {"ctx": 0, "win": 100000, "win_certain": True, "status": "idle", "cum_input": 0,
+    base = {"ctx": 0, "win": 100000, "win_certain": True, "status": "active", "cum_input": 0,
             "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
             "bridge_short": "-", "u8": "abcd1234", "last_prompt": "", "initial_prompt": "",
             "override_title": "", "custom_title": ""}

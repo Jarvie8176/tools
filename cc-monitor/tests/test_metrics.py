@@ -13,16 +13,16 @@ def _row(status, ctx=0, win=200000):
 
 
 def test_exposition_counts_by_status_always_emits_all_labels():
-    d = {"rows": [_row("busy"), _row("idle"), _row("idle")], "prom": {}}
+    d = {"rows": [_row("busy"), _row("active"), _row("active")], "prom": {}}
     text = metrics.render_exposition(d)
     assert 'cc_monitor_sessions{status="busy"} 1' in text
-    assert 'cc_monitor_sessions{status="idle"} 2' in text
+    assert 'cc_monitor_sessions{status="active"} 2' in text
     assert 'cc_monitor_sessions{status="orphaned"} 0' in text  # zero series still emitted
     assert "cc_monitor_sessions_total 3" in text
 
 
 def test_exposition_context_sum_and_pct_max():
-    d = {"rows": [_row("busy", ctx=50000), _row("idle", ctx=180000)], "prom": {}}
+    d = {"rows": [_row("busy", ctx=50000), _row("active", ctx=180000)], "prom": {}}
     text = metrics.render_exposition(d)
     assert "cc_monitor_context_tokens_sum 230000" in text
     assert "cc_monitor_context_pct_max 90.0" in text  # worst-case 180000/200000
@@ -30,7 +30,7 @@ def test_exposition_context_sum_and_pct_max():
 
 def test_pct_max_ignores_unknown_window():
     # a session with an unreadable window (win=0) must not divide-by-zero
-    d = {"rows": [{"status": "idle", "ctx": 100, "win": 0}], "prom": {}}
+    d = {"rows": [{"status": "active", "ctx": 100, "win": 0}], "prom": {}}
     assert "cc_monitor_context_pct_max 0.0" in metrics.render_exposition(d)
 
 
@@ -52,7 +52,7 @@ def test_exposition_has_help_type_and_trailing_newline():
 
 def test_exposition_help_type_once_per_family_not_per_series():
     # the "#71 bug": a repeated HELP/TYPE for a multi-series family makes node-exporter reject the
-    # WHOLE file. cc_monitor_sessions has 3 series (busy/idle/orphaned) but must carry one HELP/TYPE.
+    # WHOLE file. cc_monitor_sessions has 3 series (busy/active/orphaned) but must carry one HELP/TYPE.
     text = metrics.render_exposition({"rows": [{"status": "busy", "ctx": 0, "win": 1}], "prom": {}})
     assert text.count("# HELP cc_monitor_sessions ") == 1
     assert text.count("# TYPE cc_monitor_sessions ") == 1
