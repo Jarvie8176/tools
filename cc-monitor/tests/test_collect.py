@@ -203,6 +203,8 @@ def test_parse_cache_reuses_unchanged_transcript(claude, monkeypatch):
 
 
 def test_render_text_strips_ansi_control_chars(claude):
+    from cc_monitor import config
+    config.set_overrides(redact_default=False)  # this tests ANSI stripping, not redaction
     claude.registry(1, "u", "/home/x/p")
     claude.proc_alive(1, {})
     claude.transcript("u", "/home/x/p", [user("\x1b]0;PWN\x07hi\x1b[2J"),

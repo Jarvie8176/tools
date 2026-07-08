@@ -49,9 +49,27 @@ def test_save_roundtrip_and_schema_gate(tmp_path):
     assert config.load(p)["ctx_crit_pct"] == 70  # persisted across reload
 
 
+def test_redact_default_is_safe_by_default(tmp_path):
+    # safe-by-default: with no config file, prompt+title are masked (redact_default True)
+    assert config.DEFAULTS["redact_default"] is True
+    assert config.load(str(tmp_path / "none.json"))["redact_default"] is True
+
+
 def test_save_coerces_bool(tmp_path):
     eff = config.save({"redact_default": "true"}, str(tmp_path / "cfg.json"))
     assert eff["redact_default"] is True
+
+
+def test_cli_override_wins_over_file_and_is_not_persisted(tmp_path):
+    # precedence: CLI override > config file > schema default; and the override never hits the file
+    p = str(tmp_path / "cfg.json")
+    config.save({"redact_default": True}, p)          # file says redact on
+    config._cache[0] = None
+    config.set_overrides(redact_default=False)        # per-invocation --no-redact
+    assert config.load(p)["redact_default"] is False  # override wins over the file
+    config.set_overrides()                            # clear (unset flag -> no-op)
+    assert config.load(p)["redact_default"] is True   # falls back to the file value
+    assert json.loads((tmp_path / "cfg.json").read_text())["redact_default"] is True  # file intact
 
 
 def test_cache_is_atomic_holder_and_save_invalidates(tmp_path):

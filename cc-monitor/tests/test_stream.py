@@ -29,7 +29,10 @@ def test_serialize_uses_absolute_ts_not_ticking_idle():
     assert out["prom"]["workers"] == "8"
 
 
-def test_serialize_exposes_initial_prompt_and_effort():
+def test_serialize_exposes_initial_prompt_and_effort(monkeypatch):
+    from cc_monitor import config
+    # this tests the API projection, not redaction — pin redaction off so raw fields pass through
+    monkeypatch.setattr(config, "load", lambda *a, **k: {**config.DEFAULTS, "redact_default": False})
     d = {"rows": [_row(initial_prompt="open the epic", last_prompt="step 2")],
          "prom": {}, "effort": "high"}
     out = json.loads(stream.serialize(d))
