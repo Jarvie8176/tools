@@ -82,12 +82,14 @@ def _status(registry_status, status_ts: float, activity_ts: float, idle_s: float
     """busy vs active for a registered, reachable session. A session's presence in the registry
     means it has a reachable connection — Claude Code drops the entry when the session ends or its
     connection goes away — so a registered, non-defunct session is **active**, with no time-based
-    'idle' tier. 'busy' narrows that to "generating right now": the registry says busy (while that
-    status is at least as fresh as the last activity), or the transcript was written within ``gap``
+    'idle' tier. 'busy' narrows that to "generating right now": the registry says busy AND that
+    status is at least as fresh as the last activity, or the transcript was written within ``gap``
     (``config.busy_idle_gap``). A present-but-defunct process is flagged 'orphaned' upstream."""
-    # Honour a fresh registry 'busy' hint; a stale one (statusUpdatedAt older than the last activity)
-    # falls through to the mtime heuristic. Registry 'idle' is NOT honoured — registered == active.
-    if registry_status == "busy" and (status_ts == 0 or status_ts >= activity_ts):
+    # Honour a registry 'busy' hint ONLY when it is fresh (statusUpdatedAt >= last activity). A
+    # timestamp-less (status_ts == 0) or stale busy is NOT trusted — it falls through to the mtime
+    # heuristic, so a long-silent session can't stay wrongly 'busy'. Registry 'idle' is never
+    # honoured — a registered, reachable session is 'active'.
+    if registry_status == "busy" and status_ts >= activity_ts:
         return "busy"
     return "busy" if idle_s < gap else "active"
 

@@ -80,3 +80,13 @@ def test_cache_is_atomic_holder_and_save_invalidates(tmp_path):
     assert config._cache[0] is None or isinstance(config._cache[0], tuple)
     config.save({"ctx_warn_pct": 11}, p)      # save() must invalidate then repopulate
     assert config.load(p)["ctx_warn_pct"] == 11
+
+
+def test_save_drops_removed_or_unknown_keys(tmp_path):
+    # a knob removed from SCHEMA (or any junk) must not be persisted forever across saves
+    p = tmp_path / "cfg.json"
+    p.write_text(json.dumps({"ctx_warn_pct": 40, "active_gap": 900, "bogus": 1}))
+    config.save({"ctx_crit_pct": 70}, str(p))
+    on_disk = json.loads(p.read_text())
+    assert "active_gap" not in on_disk and "bogus" not in on_disk
+    assert on_disk["ctx_warn_pct"] == 40 and on_disk["ctx_crit_pct"] == 70

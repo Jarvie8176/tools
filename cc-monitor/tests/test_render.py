@@ -29,6 +29,20 @@ def test_ctx_colour_respects_config_thresholds():
     assert "#e5534b" in colour(crit + 1)   # red
 
 
+def test_html_status_glyph_distinguishes_active_from_busy():
+    from cc_monitor import config
+
+    def row_html(status):
+        row = {"ctx": 0, "win": 100000, "win_certain": True, "status": status, "cum_input": 0,
+               "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
+               "bridge_short": "-", "u8": "abcd1234", "last_prompt": "", "override_title": "",
+               "custom_title": ""}
+        return render._row_html(row, config.DEFAULTS)
+    assert "● busy" in row_html("busy")
+    assert "◐ active" in row_html("active") and "● active" not in row_html("active")  # not busy glyph
+    assert "⚠ orphaned" in row_html("orphaned")
+
+
 def test_html_inlines_empty_favicon_to_suppress_request():
     # browser must not fetch /favicon.ico (which the server would otherwise 204) on every refresh
     d = {"ts": 0, "prom": {}, "rows": []}

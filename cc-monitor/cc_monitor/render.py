@@ -40,6 +40,11 @@ def _idle(idle_s: float) -> str:
     return f"{int(idle_s)}s" if idle_s < 3600 else f"{int(idle_s / 60)}m"
 
 
+def _glyph(status: str) -> str:
+    """Status glyph, shared by the text and HTML renderers so 'active' never scans like 'busy'."""
+    return "⚠" if status == "orphaned" else "●" if status == "busy" else "◐"
+
+
 def _ts(epoch: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(epoch))
 
@@ -71,7 +76,7 @@ def render_text(d: dict) -> str:
         bar = "#" * min(int(pct / 10), 10) + "." * (10 - min(int(pct / 10), 10))
         ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{'' if certain else '?'}"
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
-        mark = "⚠" if r["status"] == "orphaned" else "●" if r["status"] == "busy" else "◐"
+        mark = _glyph(r["status"])
         redact_on = cfg["redact_default"]
         title, _src = title_of(r)
         title = privacy.redact(title, redact_on)
@@ -123,7 +128,7 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     seff_html = (f"<span class=mono>{_html.escape(trunc(seff, 8))}</span>" if seff
                  else "<span class=small style='opacity:.4'>·</span>")
     return (
-        f"<tr><td><span style='color:{stat_c}'>● {_html.escape(r['status'])}</span></td>"
+        f"<tr><td><span style='color:{stat_c}'>{_glyph(r['status'])} {_html.escape(r['status'])}</span></td>"
         f"<td class=mono>{_html.escape(r['u8'])}</td><td class='mono small'>{name}</td>"
         f"<td>{title_html} <span class=small style='opacity:.5'>[{src}]</span></td>"
         f"<td class='mono small' style='color:#7d8590'>{initp}</td>"

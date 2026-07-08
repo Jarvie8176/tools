@@ -109,7 +109,9 @@ def load(path: str | None = None) -> dict:
 def save(partial: dict, path: str | None = None) -> dict:
     """Merge ``partial`` into the config file (schema-gated, atomic write); return new effective."""
     path = path or paths.CONFIG_FILE
-    merged = _read_raw(path)
+    # Start from the on-disk config but drop any key no longer in SCHEMA (e.g. a removed knob), so a
+    # save cleans stale keys off disk rather than persisting them forever.
+    merged = {k: v for k, v in _read_raw(path).items() if k in SCHEMA}
     for k, v in (partial or {}).items():
         if k in SCHEMA:  # ignore unknown keys — never let a caller write arbitrary content
             merged[k] = _coerce(k, v)

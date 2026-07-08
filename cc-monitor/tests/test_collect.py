@@ -182,15 +182,18 @@ def test_transcript_race_does_not_crash_collect(claude):
     assert len(d["rows"]) == 1 and d["rows"][0]["ctx"] == 0
 
 
-def test_status_busy_hint_else_active():
-    # a fresh registry 'busy' hint (status_ts=0 => no timestamp => trusted) stays busy
-    assert collect._status("busy", 0, 1000.0, 5000, 12) == "busy"
-    # registry 'idle' is NOT honoured — a registered session falls to the mtime heuristic:
-    assert collect._status("idle", 0, 1000.0, 1, 12) == "busy"       # recent write -> busy
-    assert collect._status("idle", 0, 1000.0, 5000, 12) == "active"  # silent -> active (no idle tier)
+def test_status_busy_only_when_fresh_or_recent():
+    # a FRESH registry 'busy' (statusUpdatedAt >= last activity) is trusted
+    assert collect._status("busy", 2000.0, 1000.0, 5000, 12) == "busy"
+    # a timestamp-less (status_ts=0) or stale registry 'busy' is NOT trusted -> mtime heuristic, so a
+    # long-silent session can't stay wrongly 'busy'
+    assert collect._status("busy", 0, 1000.0, 5000, 12) == "active"    # no timestamp + long silent
+    assert collect._status("busy", 0, 1000.0, 5, 12) == "busy"         # no timestamp but recent write
+    assert collect._status("busy", 1.0, 1000.0, 5000, 12) == "active"  # stale busy + long silent
+    # registry 'idle' is never honoured; registered == active (no time-based idle tier)
+    assert collect._status("idle", 0, 1000.0, 1, 12) == "busy"         # recent write -> busy
+    assert collect._status("idle", 0, 1000.0, 5000, 12) == "active"    # silent -> active
     assert collect._status(None, 0, 1000.0, 5000, 12) == "active"
-    # a stale registry 'busy' (timestamp older than activity) is not trusted -> mtime heuristic
-    assert collect._status("busy", 1.0, 1000.0, 5000, 12) == "active"
 
 
 def test_parse_cache_reuses_unchanged_transcript(claude, monkeypatch):
