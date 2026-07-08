@@ -15,7 +15,7 @@ that by reading the authoritative local sources directly.
 
 | Source | Provides |
 |---|---|
-| `~/.claude/sessions/<pid>.json` | session discovery (`pid`, `sessionId`, `procStart`, `cwd`, `name`) for **both** cc-session `--resume` workers and RC env-spawned workers. *Note: recent Claude Code versions dropped the `status`/`bridgeSessionId` fields this once read — `busy`/`idle` now falls through to a transcript-mtime silence gap (the registry `status` is still honoured when present and fresh); `/proc` only validates process liveness / zombie / PID reuse.* |
+| `~/.claude/sessions/<pid>.json` | session discovery (`pid`, `sessionId`, `procStart`, `cwd`, `name`) for **both** cc-session `--resume` workers and RC env-spawned workers. *Note: the status axis is **busy / active** — a session's presence in the registry means it has a reachable connection (Claude Code drops the entry when the session ends or disconnects), so a registered, reachable session is **active**, narrowed to **busy** while it is generating (a transcript write within `busy_idle_gap`). There is no time-based "idle" tier. `/proc` only validates process liveness (a defunct/zombie process → **orphaned**). Recent Claude Code versions dropped the `status`/`bridgeSessionId` fields this once read; a fresh registry `status: busy` is still honoured as a busy hint when present.* |
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
 | `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable); and the `env`-block window keys as a **fallback** beneath `/proc` — Claude Code applies them internally so they never reach `/proc/environ`, and a `claude --resume` worker's window is otherwise under-read as 200k. The fallback supplies the value but is marked certain only when the worker started at/after the settings mtime (else `?`, unless usage already proves the window) |
@@ -90,13 +90,12 @@ crashing a render.
 
 | Key | Default | Range | Effect |
 |---|---|---|---|
-| `busy_idle_gap` | `12` | 1–3600 | seconds of transcript silence before a session flips to `idle` (env: `CC_MONITOR_BUSY_IDLE_GAP`) |
+| `busy_idle_gap` | `12` | 1–3600 | seconds of transcript silence before a session flips from `busy` to `active` (env: `CC_MONITOR_BUSY_IDLE_GAP`) |
 | `ctx_warn_pct` | `50` | 0–100 | context-usage colour turns amber above this |
 | `ctx_crit_pct` | `80` | 0–100 | context-usage colour turns red above this |
 | `title_trunc_text` / `prompt_trunc_text` | `22` / `40` | 4–512 | text-mode truncation widths |
 | `title_trunc_html` / `prompt_trunc_html` | `48` / `70` | 4–512 | HTML-mode truncation widths |
 | `redact_default` | `true` | — | mask each session's prompt + title server-side — safe-by-default (see Privacy) |
-| `active_gap` | `900` | 1–86400 | *reserved — defined but not yet applied* |
 
 **Privacy** — redaction is **on by default** (`redact_default: true`): each session's prompt **and**
 title is masked to `[redacted]` server-side, across the HTML, text, and API/SSE output. The real

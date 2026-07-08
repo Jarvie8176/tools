@@ -71,7 +71,7 @@ def render_text(d: dict) -> str:
         bar = "#" * min(int(pct / 10), 10) + "." * (10 - min(int(pct / 10), 10))
         ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{'' if certain else '?'}"
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
-        mark = "⚠" if r["status"] == "orphaned" else "●" if r["status"] == "busy" else "○"
+        mark = "⚠" if r["status"] == "orphaned" else "●" if r["status"] == "busy" else "◐"
         redact_on = cfg["redact_default"]
         title, _src = title_of(r)
         title = privacy.redact(title, redact_on)
@@ -86,7 +86,7 @@ def render_text(d: dict) -> str:
         )
     lines.append("-" * 150)
     lines.append(
-        " ● busy / ○ idle (registry status; env workers via mtime) / ⚠ orphaned (present, not reachable)."
+        " ● busy (generating) / ◐ active (registered = reachable connection) / ⚠ orphaned (present, not reachable)."
         "  TITLE = custom-title"
         " or manual override; '—' = env-spawned GUI session, real title cloud-side."
     )
@@ -173,7 +173,7 @@ def render_html(d: dict, refresh: int = 3) -> str:
 {rows}
 </table>
 <div class=small style='margin-top:10px'>
- ● busy / ○ idle = registry status (env workers via mtime) / ⚠ orphaned = present but not reachable &nbsp;|&nbsp;
+ ● busy = generating / ◐ active = registered, reachable connection / ⚠ orphaned = present but not reachable &nbsp;|&nbsp;
  title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  initial-prompt = opening user turn (stable) / last-prompt = latest (volatile) &nbsp;|&nbsp;
  header effort = settings.json effortLevel (global; "?" = unreadable); s-effort = per-session effort from OTel (latest request; "·" = telemetry off/no data) &nbsp;|&nbsp;

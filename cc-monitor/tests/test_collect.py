@@ -1,3 +1,4 @@
+import os
 import time
 
 from cc_monitor import collect, render
@@ -6,15 +7,14 @@ from .conftest import assistant, custom_title, user
 
 
 def test_discovers_both_populations(claude):
-    # a --resume worker (registry has FRESH status) + an env-spawned worker (no status)
-    fresh = int((time.time() + 3600) * 1000)  # statusUpdatedAt newer than transcript activity
-    claude.registry(101, "res-uuid", "/home/x/p", name="cc-01", status="idle",
-                    bridge="session_res", status_updated_at=fresh)
+    # a --resume worker (registry 'idle' is IGNORED — registered == active) + an env-spawned worker
+    claude.registry(101, "res-uuid", "/home/x/p", name="cc-01", status="idle", bridge="session_res")
     claude.proc_alive(101, {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
-    claude.transcript("res-uuid", "/home/x/p", [
+    res_tp = claude.transcript("res-uuid", "/home/x/p", [
         custom_title("SSH manifest epic"),
         assistant("claude-opus-4-8", inp=300_000),
     ])
+    os.utime(res_tp, (time.time() - 3600, time.time() - 3600))  # silent for an hour
     claude.registry(202, "env-uuid", "/home/x/p", name="cc-02")  # env-spawned, no status
     claude.proc_alive(202, {})
     claude.transcript("env-uuid", "/home/x/p", [
@@ -26,7 +26,8 @@ def test_discovers_both_populations(claude):
     assert set(by_id) == {"res-uuid"[:8], "env-uuid"[:8]}
     # env-spawned worker with recent activity is busy via mtime heuristic
     assert by_id["env-uuid"[:8]]["status"] == "busy"
-    assert by_id["res-uuid"[:8]]["status"] == "idle"  # authoritative from registry
+    # registry 'idle' is ignored; a registered, reachable, silent session is 'active' (no idle tier)
+    assert by_id["res-uuid"[:8]]["status"] == "active"
 
 
 def test_stale_registry_entry_skipped(claude):
@@ -181,12 +182,15 @@ def test_transcript_race_does_not_crash_collect(claude):
     assert len(d["rows"]) == 1 and d["rows"][0]["ctx"] == 0
 
 
-def test_status_no_timestamp_trusts_registry():
-    # regression: a busy status with no statusUpdatedAt (status_ts=0) must NOT be downgraded to idle
+def test_status_busy_hint_else_active():
+    # a fresh registry 'busy' hint (status_ts=0 => no timestamp => trusted) stays busy
     assert collect._status("busy", 0, 1000.0, 5000, 12) == "busy"
-    assert collect._status("idle", 0, 1000.0, 1, 12) == "idle"
-    # a stale idle (timestamp older than activity) still falls through to the activity heuristic
-    assert collect._status("idle", 1.0, 1000.0, 1, 12) == "busy"
+    # registry 'idle' is NOT honoured — a registered session falls to the mtime heuristic:
+    assert collect._status("idle", 0, 1000.0, 1, 12) == "busy"       # recent write -> busy
+    assert collect._status("idle", 0, 1000.0, 5000, 12) == "active"  # silent -> active (no idle tier)
+    assert collect._status(None, 0, 1000.0, 5000, 12) == "active"
+    # a stale registry 'busy' (timestamp older than activity) is not trusted -> mtime heuristic
+    assert collect._status("busy", 1.0, 1000.0, 5000, 12) == "active"
 
 
 def test_parse_cache_reuses_unchanged_transcript(claude, monkeypatch):

@@ -19,7 +19,7 @@ def test_ctx_colour_respects_config_thresholds():
 
     def colour(pct):
         win = 100_000
-        row = {"ctx": int(pct / 100 * win), "win": win, "win_certain": True, "status": "idle",
+        row = {"ctx": int(pct / 100 * win), "win": win, "win_certain": True, "status": "active",
                "cum_input": 0, "cum_output": 0, "full": True, "idle_s": 1, "name": "n",
                "model": "m", "bridge_short": "-", "u8": "abcd1234", "last_prompt": "",
                "override_title": "", "custom_title": ""}
@@ -57,7 +57,7 @@ def test_effort_unknown_renders_placeholder():
 
 
 def test_initial_prompt_rendered_in_row():
-    row = {"ctx": 0, "win": 100000, "win_certain": True, "status": "idle", "cum_input": 0,
+    row = {"ctx": 0, "win": 100000, "win_certain": True, "status": "active", "cum_input": 0,
            "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
            "bridge_short": "-", "u8": "abcd1234", "last_prompt": "later turn",
            "initial_prompt": "opening turn", "override_title": "", "custom_title": ""}
@@ -66,7 +66,7 @@ def test_initial_prompt_rendered_in_row():
 
 
 def _row(**kw):
-    base = {"ctx": 0, "win": 100000, "win_certain": True, "status": "idle", "cum_input": 0,
+    base = {"ctx": 0, "win": 100000, "win_certain": True, "status": "active", "cum_input": 0,
             "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
             "bridge_short": "-", "u8": "abcd1234", "last_prompt": "", "initial_prompt": "",
             "override_title": "", "custom_title": ""}

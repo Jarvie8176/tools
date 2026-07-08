@@ -20,8 +20,7 @@ from . import paths
 
 # key -> (default, min, max). A None min marks a bool knob; everything else is a bounded int.
 SCHEMA: dict = {
-    "busy_idle_gap":     (12, 1, 3600),     # s of transcript silence before mtime heuristic -> idle
-    "active_gap":        (900, 1, 86400),   # s before an alive session is "idle" vs "active" (M-B)
+    "busy_idle_gap":     (12, 1, 3600),     # s of transcript silence before busy -> active (mtime)
     "ctx_warn_pct":      (50, 0, 100),       # context-usage colour: amber above this
     "ctx_crit_pct":      (80, 0, 100),       # context-usage colour: red above this
     "title_trunc_text":  (22, 4, 512),

@@ -79,16 +79,17 @@ def _proc_liveness(pid, procstart=None) -> str:
 
 
 def _status(registry_status, status_ts: float, activity_ts: float, idle_s: float, gap: float) -> str:
-    """busy/idle. Registry status is trusted only while it is at least as fresh as the last
-    observed activity — a stale 'idle' (statusUpdatedAt older than the transcript write) does NOT
-    mask a session that has since done work; it falls through to the activity heuristic.
-
-    ``gap`` is the config'd busy->idle silence threshold (``config.busy_idle_gap``)."""
-    # Trust the registry status unless we KNOW it is stale (have a statusUpdatedAt older than the
-    # last activity). status_ts == 0 means "no timestamp" -> don't distrust, use the status as-is.
-    if registry_status in ("busy", "idle") and (status_ts == 0 or status_ts >= activity_ts):
-        return registry_status
-    return "busy" if idle_s < gap else "idle"  # no status, or status stale vs activity
+    """busy vs active for a registered, reachable session. A session's presence in the registry
+    means it has a reachable connection — Claude Code drops the entry when the session ends or its
+    connection goes away — so a registered, non-defunct session is **active**, with no time-based
+    'idle' tier. 'busy' narrows that to "generating right now": the registry says busy (while that
+    status is at least as fresh as the last activity), or the transcript was written within ``gap``
+    (``config.busy_idle_gap``). A present-but-defunct process is flagged 'orphaned' upstream."""
+    # Honour a fresh registry 'busy' hint; a stale one (statusUpdatedAt older than the last activity)
+    # falls through to the mtime heuristic. Registry 'idle' is NOT honoured — registered == active.
+    if registry_status == "busy" and (status_ts == 0 or status_ts >= activity_ts):
+        return "busy"
+    return "busy" if idle_s < gap else "active"
 
 
 def collect(now: float | None = None) -> dict:
@@ -149,8 +150,8 @@ def collect(now: float | None = None) -> dict:
             "bridge_id": bridge,
             "bridge_short": bridge.replace("session_", "s_")[:14] or "-",
             # an orphaned (present-but-not-reachable, e.g. defunct) process would otherwise read
-            # as "idle" (its transcript went silent) — surface it so a listed-but-dead session
-            # is not mistaken for a live one.
+            # as "active" (registered, and its transcript merely went silent) — surface it so a
+            # listed-but-dead session is not mistaken for a live, reachable one.
             "status": "orphaned" if live == "orphaned"
             else _status(reg.get("status"), status_ts, info["mtime"], idle_s, gap),
             "idle_s": idle_s,
