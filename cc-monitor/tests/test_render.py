@@ -61,7 +61,7 @@ def test_initial_prompt_rendered_in_row():
            "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
            "bridge_short": "-", "u8": "abcd1234", "last_prompt": "later turn",
            "initial_prompt": "opening turn", "override_title": "", "custom_title": ""}
-    html = render._row_html(row, config_defaults())
+    html = render._row_html(row, {**config_defaults(), "redact_default": False})
     assert "opening turn" in html and "later turn" in html
 
 
