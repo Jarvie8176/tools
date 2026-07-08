@@ -13,7 +13,9 @@ StartLimitBurst=5
 Type=simple
 # Optional textfile metrics target; empty (unset in install/.env) = disabled. See .env.example.
 Environment=CC_MONITOR_METRICS_FILE=__METRICS_FILE__
-ExecStart=__CCMONITOR_BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
+# Prod owns the single per-host :4318 OTLP receiver (per-session effort). Disable with
+# OTEL_SINK=0 in install/.env (renders --no-otel-sink) if another service owns the sink.
+ExecStart=__CCMONITOR_BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__ __OTEL_ARGS__
 Restart=on-failure
 RestartSec=5
 # Deterministic 0644 for the textfile metrics file (CC_MONITOR_METRICS_FILE) so the node-exporter

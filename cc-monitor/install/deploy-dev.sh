@@ -7,9 +7,8 @@
 # so staging edits never touch the prod instance. Typical use: a dedicated git worktree
 # (e.g. `git worktree add ../.wt/cc-monitor-dev <branch>`), then run this from inside it.
 #
-# Edge: front it at cc-monitor-dev.h.fnpg.me (single-label host — a nested dev.cc-monitor.h.fnpg.me
-# would need its own wildcard cert; single-label wildcards don't nest). See the homelab-ops
-# runbooks/edge-routing conf.d/cc-monitor-dev.caddy.
+# Edge: front it behind your reverse proxy at a single-label host (a nested dev.cc-monitor.<domain>
+# would need its own wildcard cert; single-label wildcards don't nest).
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -21,6 +20,11 @@ env_file="$here/.env"
 HOST="${HOST:-127.0.0.1}"
 PORT_DEV="${PORT_DEV:-8898}"
 REFRESH="${REFRESH:-3}"
+# Dev defaults to NO embedded OTLP sink (OTEL_SINK=0): prod owns the single :4318 receiver per host.
+# Set OTEL_SINK=1 (+ optional OTEL_PORT) in install/.env to give dev the sink instead.
+OTEL_SINK="${OTEL_SINK:-0}"
+if [[ "$OTEL_SINK" == "0" ]]; then otel_args="--no-otel-sink"; else otel_args=""; fi
+[[ -n "${OTEL_PORT:-}" ]] && otel_args="${otel_args:+$otel_args }--otel-port $OTEL_PORT"
 
 state_dir="$HOME/.local/share/cc-monitor-dev"
 venv="$state_dir/venv"
@@ -40,6 +44,7 @@ sed -e "s#__BIN__#$bin#g" \
     -e "s#__PORT__#$PORT_DEV#g" \
     -e "s#__REFRESH__#$REFRESH#g" \
     -e "s#__CONFIG__#$config#g" \
+    -e "s#__OTEL_ARGS__#$otel_args#g" \
     "$here/cc-monitor-dev.service.template" > "$unit_dir/cc-monitor-dev.service"
 
 systemctl --user daemon-reload

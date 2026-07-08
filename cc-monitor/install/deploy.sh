@@ -21,6 +21,11 @@ HOST="${HOST:-127.0.0.1}"
 # Optional textfile metrics target (Alloy/node-exporter textfile collector dir). Unset = disabled;
 # an empty Environment= leaves paths.METRICS_FILE "" so cc-monitor writes no textfile.
 METRICS_FILE="${CC_MONITOR_METRICS_FILE:-}"
+# Prod owns the per-host :4318 OTLP receiver by default (per-session effort). Set OTEL_SINK=0
+# in install/.env (→ --no-otel-sink) if another cc-monitor instance owns the sink on this host.
+OTEL_SINK="${OTEL_SINK:-1}"
+if [[ "$OTEL_SINK" == "0" ]]; then otel_args="--no-otel-sink"; else otel_args=""; fi
+[[ -n "${OTEL_PORT:-}" ]] && otel_args="${otel_args:+$otel_args }--otel-port $OTEL_PORT"
 
 # --- install/update the package (user site) ---
 echo "cc-monitor: installing package from $pkg_dir"
@@ -40,6 +45,7 @@ sed -e "s#__CCMONITOR_BIN__#$bin#g" \
     -e "s#__PORT__#$PORT#g" \
     -e "s#__REFRESH__#$REFRESH#g" \
     -e "s#__METRICS_FILE__#$METRICS_FILE#g" \
+    -e "s#__OTEL_ARGS__#$otel_args#g" \
     "$here/cc-monitor.service.template" > "$unit_dir/cc-monitor.service"
 
 systemctl --user daemon-reload
