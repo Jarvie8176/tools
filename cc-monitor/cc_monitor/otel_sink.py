@@ -166,6 +166,11 @@ class Rollup:
             return json.loads(json.dumps(self._sessions))  # deep copy for tests
 
 
+# Cap a single OTLP POST body. Loopback-only, but a runaway/buggy local exporter must not be able
+# to force an unbounded read into memory (this tool runs under a co-tenant memory budget).
+_MAX_BODY = 8 * 1024 * 1024
+
+
 def _handler(rollup: Rollup):
     class _Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
@@ -176,6 +181,7 @@ def _handler(rollup: Rollup):
             chunked — no Content-Length — so a naive read returns empty; PoC-proven)."""
             if "chunked" in (self.headers.get("Transfer-Encoding") or "").lower():
                 chunks = []
+                total = 0
                 while True:
                     size_line = self.rfile.readline().strip()
                     try:
@@ -185,6 +191,9 @@ def _handler(rollup: Rollup):
                     if size == 0:
                         self.rfile.readline()  # consume trailing CRLF
                         break
+                    total += size
+                    if total > _MAX_BODY:  # runaway exporter — stop reading, drop the oversized body
+                        break
                     chunks.append(self.rfile.read(size))
                     self.rfile.readline()  # CRLF after each chunk
                 return b"".join(chunks)
@@ -192,6 +201,7 @@ def _handler(rollup: Rollup):
                 n = int(self.headers.get("Content-Length") or 0)
             except ValueError:
                 n = 0
+            n = min(n, _MAX_BODY)  # cap the declared length before allocating the read
             return self.rfile.read(n) if n > 0 else b""
 
         def do_POST(self):  # noqa: N802 (stdlib API name)

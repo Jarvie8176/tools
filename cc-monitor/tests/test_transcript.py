@@ -101,6 +101,56 @@ def test_malformed_origin_non_dict_no_crash(claude):
     assert transcript.parse(path)["last_prompt"] == "real"
 
 
+def test_message_null_or_non_dict_no_crash(claude):
+    # `message` present-but-null (or a non-dict) must not crash the whole parse — the value is
+    # skipped, and later valid rows still parse.
+    path = claude.transcript("s1", "/p", [
+        {"type": "user", "message": None},
+        {"type": "user", "message": "not-a-dict"},
+        user("real"),
+        assistant("claude-opus-4-8", inp=10),
+    ])
+    info = transcript.parse(path)
+    assert info["last_prompt"] == "real"
+    assert info["model"] == "claude-opus-4-8"
+
+
+def test_assistant_message_null_or_non_dict_no_crash(claude):
+    # a null / non-dict assistant `message` is skipped, not fatal
+    path = claude.transcript("s1", "/p", [
+        {"type": "assistant", "message": None},
+        {"type": "assistant", "message": "not-a-dict"},
+        assistant("claude-opus-4-8", inp=100),
+    ])
+    info = transcript.parse(path)
+    assert info["ctx"] == 100
+    assert info["model"] == "claude-opus-4-8"
+
+
+def test_usage_null_tokens_no_crash(claude):
+    # a present-but-null token field must not crash the ctx / cumulative sum (None + int)
+    path = claude.transcript("s1", "/p", [
+        {"type": "assistant", "message": {"model": "claude-opus-4-8", "usage": {
+            "input_tokens": None, "output_tokens": 5,
+            "cache_read_input_tokens": None, "cache_creation_input_tokens": None,
+        }}},
+        assistant("claude-opus-4-8", inp=200),
+    ])
+    info = transcript.parse(path)
+    assert info["ctx"] == 200          # last valid usage wins
+    assert info["cum_output"] == 5     # null-token row still contributed its real output
+    assert info["model"] == "claude-opus-4-8"
+
+
+def test_usage_non_dict_no_crash(claude):
+    # a non-dict `usage` (truthy but wrong shape) is skipped, not fatal
+    path = claude.transcript("s1", "/p", [
+        {"type": "assistant", "message": {"model": "claude-opus-4-8", "usage": "nope"}},
+        assistant("claude-opus-4-8", inp=42),
+    ])
+    assert transcript.parse(path)["ctx"] == 42
+
+
 def test_empty_origin_kind_treated_as_human(claude):
     path = claude.transcript("s1", "/p", [
         {"type": "user", "message": {"content": "kept"}, "origin": {"kind": ""}},

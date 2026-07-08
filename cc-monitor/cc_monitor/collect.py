@@ -125,8 +125,8 @@ def collect(now: float | None = None) -> dict:
             seen_paths.add(tpath)
         try:
             info = _parse_cached(tpath) if tpath else transcript.empty(_safe_mtime(reg_path))
-        except OSError:
-            info = transcript.empty()
+        except Exception:  # noqa: BLE001 — one malformed transcript must never wedge the whole
+            info = transcript.empty()  # table (or silently stop the serve broker); skip this row
         idle_s = max(0.0, now - info["mtime"])  # clamp: a transcript written after `now` was
         #        sampled would otherwise show a negative idle (e.g. "-1s") for an active session
         status_ts = (reg.get("statusUpdatedAt", 0) or 0) / 1000  # registry epoch-ms -> s
