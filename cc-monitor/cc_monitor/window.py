@@ -54,25 +54,6 @@ def read_model_env(pid, proc_dir: str | None = None):
     return env
 
 
-def merge_model_env(proc_env: dict | None, settings_env: dict | None):
-    """Overlay the worker's exec-time ``/proc`` env on the settings.json ``env``-block defaults.
-
-    The settings.json ``env`` block (e.g. ``ANTHROPIC_DEFAULT_OPUS_MODEL=…[1m]``) is applied
-    INTERNALLY by Claude Code to every session, so it never appears in ``/proc/<pid>/environ`` — a
-    ``claude --resume`` worker launched from a plain shell has an empty model env THERE yet still
-    runs at the settings-configured window. Reading ``/proc`` alone under-reports such a worker as
-    200k (and, worse, marks it certain). Here ``proc`` (a spawner override, authoritative when
-    present) wins per key; ``settings`` fills only the keys ``proc`` lacks.
-
-    Returns ``None`` only when ``/proc`` was unreadable AND ``settings`` had nothing — the one case
-    the window is still locally unknowable, which :func:`resolve_window` flags ``'?'``. A readable
-    but empty ``proc`` env stays a dict (not None): we DID observe the worker's env and found no
-    override, so with an equally-empty settings block 200k is a certain answer, not a guess."""
-    if proc_env is None:
-        return dict(settings_env) if settings_env else None
-    return {**(settings_env or {}), **proc_env}
-
-
 def _family(model: str) -> str | None:
     m = (model or "").lower()
     if "opus" in m:
@@ -110,3 +91,31 @@ def resolve_window(env, model, peak_ctx):
     if (peak_ctx or 0) > win:  # observed usage overrides a too-small INFERRED window
         win, certain = ONE_M, True
     return win, certain
+
+
+def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted):
+    """Full window resolution layering the settings.json ``env`` block under the ``/proc`` env.
+
+    The settings.json ``env`` block (e.g. ``ANTHROPIC_DEFAULT_OPUS_MODEL=…[1m]``) is applied
+    INTERNALLY by Claude Code, so it never reaches ``/proc/<pid>/environ`` — a ``claude --resume``
+    worker's exec env lacks it yet the worker still runs at the settings window. Reading ``/proc``
+    alone under-reports such a worker as 200k. But settings.json is a GLOBAL, TIME-VARYING source,
+    so it grants a WINDOW VALUE freely and CERTAINTY only with evidence:
+
+    - ``proc_env`` is authoritative (exec-time evidence). If it already resolves a window > baseline
+      (a spawner ``[1m]``/explicit ceiling, or peak proof), that answer stands — settings never
+      overrides observed evidence.
+    - ``proc_env is None`` (unreadable: permission/hidepid/gone) stays unknowable. We do NOT
+      fabricate certainty from global settings for an env we couldn't observe — it may carry an
+      unseen spawner override. Falls back to peak-only (``'?'`` unless usage proves it).
+    - Otherwise (proc readable, resolved to plain baseline) the settings block may RAISE the window.
+      That raise is ``certain`` only if ``settings_trusted`` (the worker demonstrably started under
+      the current settings — mtime <= start) OR peak already proves the larger window; else ``'?'``.
+    """
+    win, certain = resolve_window(proc_env, model, peak_ctx)
+    if proc_env is None or win != BASELINE or not settings_env:
+        return win, certain  # unreadable / already-decided / nothing to add
+    s_win, _ = resolve_window({**settings_env, **proc_env}, model, peak_ctx)
+    if s_win <= win:
+        return win, certain  # settings only ever raises here; a lower global ceiling needs evidence
+    return s_win, bool(settings_trusted or (peak_ctx or 0) > BASELINE)

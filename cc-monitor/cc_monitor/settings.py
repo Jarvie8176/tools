@@ -12,6 +12,7 @@ the whole file is never surfaced; a missing/unreadable file or key yields ``None
 from __future__ import annotations
 
 import json
+import os
 
 from . import paths, window
 
@@ -50,3 +51,14 @@ def model_env(path: str | None = None) -> dict:
     if not isinstance(env, dict):
         return {}
     return {k: v for k, v in env.items() if k in window.MODEL_ENV_KEYS and isinstance(v, str)}
+
+
+def file_mtime(path: str | None = None) -> float | None:
+    """settings.json mtime (epoch seconds), or ``None`` if the file is absent.
+
+    Used to gate the model_env fallback's certainty: only a worker that started AT OR AFTER this
+    mtime demonstrably ran under the current settings (see :func:`cc_monitor.window.resolve`)."""
+    try:
+        return os.path.getmtime(path or paths.SETTINGS_FILE)
+    except OSError:
+        return None

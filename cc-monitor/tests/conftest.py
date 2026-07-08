@@ -45,7 +45,7 @@ class FakeClaude:
         return path
 
     def registry(self, pid, session_id, cwd, name="cc-xx", status=None, bridge=None,
-                 procstart=None, status_updated_at=None):
+                 procstart=None, status_updated_at=None, started_at=None):
         rec = {"pid": pid, "sessionId": session_id, "cwd": cwd, "name": name}
         if status:
             rec["status"] = status
@@ -55,6 +55,8 @@ class FakeClaude:
             rec["procStart"] = procstart
         if status_updated_at is not None:
             rec["statusUpdatedAt"] = status_updated_at
+        if started_at is not None:
+            rec["startedAt"] = started_at
         with open(os.path.join(self.sessions, f"{pid}.json"), "w") as fh:
             json.dump(rec, fh)
 

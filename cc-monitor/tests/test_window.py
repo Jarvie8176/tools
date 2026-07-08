@@ -73,41 +73,47 @@ def test_read_model_env_excludes_default_headers(claude):
     assert env == {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
 
 
-# --- merge_model_env: settings.json env-block fallback beneath /proc environ ---
+# --- resolve(): settings.json env-block fallback with certainty provenance ---
 
-def test_merge_resume_worker_gets_1m_from_settings():
-    # the bug: `claude --resume` proc env lacks the [1m] key (settings.json env is applied
-    # internally, not in /proc) — the settings block must supply it so the window resolves to 1M.
-    proc = {}  # readable but empty (resume worker's exec env)
-    settings_env = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
-    merged = window.merge_model_env(proc, settings_env)
-    assert window.resolve_window(merged, "claude-opus-4-8", 61_000) == (1_000_000, True)
+_S1M = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
 
 
-def test_merge_proc_override_wins_over_settings():
-    # a spawner-injected proc value is authoritative and wins per key over the settings default
-    proc = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "300000"}
-    settings_env = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
-    merged = window.merge_model_env(proc, settings_env)
-    assert window.resolve_window(merged, "claude-opus-4-8", 10_000) == (300_000, True)
+def test_resolve_resume_worker_trusted_is_certain_1m():
+    # `claude --resume` proc env lacks [1m] (settings applied internally). With the worker started
+    # under the current settings (trusted), the fallback resolves to 1M with certainty.
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 61_000, True) == (1_000_000, True)
 
 
-def test_merge_both_empty_is_none_preserving_uncertain():
-    # no proc env AND no settings signal -> None -> resolve_window keeps its '?' (uncertain) path
-    assert window.merge_model_env(None, {}) is None
-    assert window.merge_model_env(None, None) is None
-    assert window.resolve_window(window.merge_model_env(None, {}), "claude-opus-4-8", 100_000) \
-        == (200_000, False)
+def test_resolve_settings_untrusted_is_uncertain():
+    # settings changed after the worker started (untrusted): supply the 1M VALUE but flag '?'.
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 61_000, False) == (1_000_000, False)
 
 
-def test_merge_proc_unreadable_falls_back_to_settings():
-    # /proc unreadable (None) but settings has [1m] -> still resolvable with certainty
-    merged = window.merge_model_env(None, {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
-    assert window.resolve_window(merged, "claude-opus-4-8", 50_000) == (1_000_000, True)
+def test_resolve_untrusted_but_peak_proves_1m():
+    # even untrusted, usage above baseline is hard proof -> certain 1M
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 400_000, False) == (1_000_000, True)
 
 
-def test_merge_readable_empty_proc_no_settings_stays_certain_200k():
-    # observed the env, found no override, and no global default either -> 200k is a certain answer
-    merged = window.merge_model_env({}, {})
-    assert merged == {}  # dict, not None: we DID read the env
-    assert window.resolve_window(merged, "claude-opus-4-8", 150_000) == (200_000, True)
+def test_resolve_proc_unreadable_ignores_settings():
+    # /proc unreadable (None): never fabricate certainty from global settings for an unseen env.
+    assert window.resolve(None, _S1M, "claude-opus-4-8", 50_000, True) == (200_000, False)
+    # peak still proves it when high
+    assert window.resolve(None, _S1M, "claude-opus-4-8", 800_000, True) == (1_000_000, True)
+
+
+def test_resolve_proc_override_wins_over_settings():
+    # a spawner [1m] in /proc is observed evidence -> certain 1M regardless of settings/trust
+    proc = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    assert window.resolve(proc, {}, "claude-opus-4-8", 10_000, False) == (1_000_000, True)
+
+
+def test_resolve_no_settings_readable_proc_is_certain_200k():
+    # observed env, no override, no settings default -> 200k certain (unchanged baseline behaviour)
+    assert window.resolve({}, {}, "claude-opus-4-8", 150_000, False) == (200_000, True)
+
+
+def test_resolve_settings_max_context_untrusted_uncertain():
+    # a settings MAX_CONTEXT ceiling (>baseline) is provisional too -> value yes, certainty gated
+    s = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"}
+    assert window.resolve({}, s, "claude-opus-4-8", 10_000, False) == (500_000, False)
+    assert window.resolve({}, s, "claude-opus-4-8", 10_000, True) == (500_000, True)

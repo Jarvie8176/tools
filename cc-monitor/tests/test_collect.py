@@ -42,16 +42,30 @@ def test_window_1m_via_peak_lower_bound(claude):
     assert (row["win"], row["win_certain"]) == (1_000_000, True)
 
 
-def test_resume_worker_window_from_settings_env_not_proc(claude):
+def test_resume_worker_window_from_settings_env_when_trusted(claude):
     # regression: a `claude --resume` worker's /proc environ lacks ANTHROPIC_DEFAULT_OPUS_MODEL
     # (settings.json env is applied internally, not in /proc). Reading /proc alone under-reported
-    # it as 200k; the settings.json env block must supply [1m] -> 1M, even below the 200k peak.
+    # it as 200k; when the worker started under the current settings (trusted), the env block
+    # supplies [1m] -> certain 1M, even below the 200k peak.
     claude.settings({"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}})
-    claude.registry(410, "u", "/home/x/p")
+    trusted_start = int((time.time() + 3600) * 1000)  # started after settings were written
+    claude.registry(410, "u", "/home/x/p", started_at=trusted_start)
     claude.proc_alive(410, {})  # empty exec env, like a resume worker
     claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=61_000)])
     row = collect.collect()["rows"][0]
     assert (row["win"], row["win_certain"]) == (1_000_000, True)
+
+
+def test_resume_worker_window_uncertain_when_settings_changed_after_start(claude):
+    # settings edited AFTER the worker started: the worker may run OLD settings, so the fallback
+    # supplies the 1M value but must NOT claim certainty (flagged '?'), and peak hasn't proven it.
+    claude.settings({"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}})
+    stale_start = int((time.time() - 3600) * 1000)  # started before settings were (re)written
+    claude.registry(412, "u", "/home/x/p", started_at=stale_start)
+    claude.proc_alive(412, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=61_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"]) == (1_000_000, False)
 
 
 def test_default_200k_when_no_proc_and_no_settings_1m(claude):

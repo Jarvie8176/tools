@@ -18,7 +18,7 @@ that by reading the authoritative local sources directly.
 | `~/.claude/sessions/<pid>.json` | session discovery + `busy`/`idle` status + `bridgeSessionId` (covers **both** cc-session `--resume` workers and RC env-spawned workers) |
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
-| `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable) |
+| `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable); and the `env`-block window keys as a **fallback** beneath `/proc` — Claude Code applies them internally so they never reach `/proc/environ`, and a `claude --resume` worker's window is otherwise under-read as 200k. The fallback supplies the value but is marked certain only when the worker started at/after the settings mtime (else `?`, unless usage already proves the window) |
 | `/tmp/cc-session/claude.prom` | **optional** cc-session supervisor health (header only; absent → standalone view) |
 
 ## Usage
