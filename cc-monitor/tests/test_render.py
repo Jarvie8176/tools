@@ -65,6 +65,38 @@ def test_initial_prompt_rendered_in_row():
     assert "opening turn" in html and "later turn" in html
 
 
+def _row(**kw):
+    base = {"ctx": 0, "win": 100000, "win_certain": True, "status": "idle", "cum_input": 0,
+            "cum_output": 0, "full": True, "idle_s": 1, "name": "n", "model": "m",
+            "bridge_short": "-", "u8": "abcd1234", "last_prompt": "", "initial_prompt": "",
+            "override_title": "", "custom_title": ""}
+    base.update(kw)
+    return base
+
+
+def test_session_effort_rendered_in_row_html():
+    html = render._row_html(_row(session_effort="xhigh"), config_defaults())
+    assert "xhigh" in html
+
+
+def test_session_effort_placeholder_when_absent_html():
+    # no per-session effort (telemetry off / no data) -> a dim '·', never "None"
+    html = render._row_html(_row(session_effort=None), config_defaults())
+    assert "None" not in html and "·" in html
+
+
+def test_session_effort_in_text_row():
+    d = {"ts": 0, "prom": {}, "rows": [_row(session_effort="max")], "effort": "high"}
+    out = render.render_text(d)
+    assert "max" in out and "effort:high" in out  # per-session col AND global header coexist
+
+
+def test_session_effort_html_escaped():
+    # OTel value is semi-trusted; a hostile effort string must be escaped, not injected
+    html = render._row_html(_row(session_effort="<img src=x>"), config_defaults())
+    assert "<img src=x>" not in html and "&lt;img" in html
+
+
 def config_defaults():
     from cc_monitor import config
     return config.DEFAULTS

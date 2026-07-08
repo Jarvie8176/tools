@@ -21,3 +21,9 @@ PROC_DIR = os.environ.get("CC_MONITOR_PROC_DIR", "/proc")
 # Textfile metrics target (Alloy textfile-collector dir, e.g. .../textfile/cc-monitor.prom).
 # Empty = metrics writing disabled; the deploy opts in since the collector dir is host-specific.
 METRICS_FILE = os.path.expanduser(os.environ.get("CC_MONITOR_METRICS_FILE", ""))
+# Per-session OTel rollup sidecar (written by the embedded OTLP sink, read by collect for the
+# per-session effort join). Distinct from settings.json's GLOBAL effortLevel — this carries the
+# effort of each session's own requests (see otel_sink.py / otel.py). 0600: holds per-session cost.
+OTEL_FILE = os.path.expanduser(
+    os.environ.get("CC_MONITOR_OTEL_FILE", os.path.join(CLAUDE_HOME, "cc-monitor-otel.json"))
+)

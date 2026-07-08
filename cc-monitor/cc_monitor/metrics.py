@@ -1,20 +1,19 @@
 """Prometheus metrics — aggregate session gauges, exposed two ways.
 
-Follows the fleet's textfile-collector SOP (runbooks/monitoring/textfile-metrics-pattern.md,
-#1239/#1416): the PRIMARY path is an atomically-written ``*.prom`` under the node-exporter textfile
-dir (``/var/lib/node-exporter/textfile_collector`` on tp-server), read off disk by the existing
-node-exporter — NOT an HTTP scrape target (cc-monitor binds a trusted interface only). The same
-exposition text is also served at ``GET /metrics`` for local validation.
+Follows the node-exporter textfile-collector convention: the PRIMARY path is an atomically-written
+``*.prom`` under the node-exporter textfile dir (e.g. ``/var/lib/node-exporter/textfile_collector``),
+read off disk by the existing node-exporter — NOT an HTTP scrape target (cc-monitor binds a trusted
+interface only). The same exposition text is also served at ``GET /metrics`` for local validation.
 
 Metrics are AGGREGATE with BOUNDED labels, never per-session. A ``session_id`` label would be an
-UNBOUNDED, churning label — every new session mints a permanently-retained series (the SOP's #1673
-cardinality trap) and leaks session identity into the TSDB. Per-session detail lives in the
-dashboard/API; Prometheus holds only low-cardinality, alertable signals: counts by status, the
-worst-case context utilisation (a session near its window), and RC connectivity.
+UNBOUNDED, churning label — every new session mints a permanently-retained series (the cardinality
+trap) and leaks session identity into the TSDB. Per-session detail lives in the dashboard/API;
+Prometheus holds only low-cardinality, alertable signals: counts by status, the worst-case context
+utilisation (a session near its window), and RC connectivity.
 
-Two SOP contracts this file honours:
+Two exposition contracts this file honours:
 - ``# HELP``/``# TYPE`` appear ONCE per metric family, never per series — node-exporter rejects the
-  WHOLE file otherwise (the "#71 bug").
+  WHOLE file otherwise.
 - every expected series is emitted even at 0 (all statuses, rc), so an absence-based alert can tell
   a real zero from a dead writer; plus a ``cc_monitor_timestamp_seconds`` staleness watchdog.
 

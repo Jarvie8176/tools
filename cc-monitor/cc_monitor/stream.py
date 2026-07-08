@@ -1,6 +1,6 @@
 """Near-real-time push: one server-side collect loop, diffed, fanned out over SSE.
 
-Evaluation (measured on tp-server, 16 live sessions):
+Evaluation (measured on a live host, 16 live sessions):
   * steady-state warm collect() = ~2ms (parse cache: unchanged transcripts aren't re-read);
     the cost is the per-CHANGE re-parse of a large transcript (~0.5s for 40MB), which no
     transport avoids — so the transport is a second-order concern.
@@ -37,7 +37,7 @@ _API_FIELDS = (
     "ctx", "peak_ctx", "win", "win_certain",
     "cum_input", "cum_output", "cum_cache", "full",
     "bridge_id", "bridge_short", "custom_title", "override_title",
-    "initial_prompt", "last_prompt",
+    "initial_prompt", "last_prompt", "session_effort",
 )
 
 

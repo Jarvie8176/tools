@@ -11,7 +11,9 @@ StartLimitBurst=5
 Type=simple
 # Dev-isolated runtime config so staging edits never clobber the prod instance's config.
 Environment=CC_MONITOR_CONFIG=__CONFIG__
-ExecStart=__BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
+# Dev defaults to --no-otel-sink (see deploy-dev.sh OTEL_SINK): prod owns the single :4318 OTLP
+# receiver per host, dev is a UI preview. Set OTEL_SINK=1 in install/.env to let dev own it instead.
+ExecStart=__BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__ __OTEL_ARGS__
 Restart=on-failure
 RestartSec=5
 # Pin 0644 for the textfile metrics file so node-exporter (runs as `nobody`) can read it — a

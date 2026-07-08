@@ -19,7 +19,20 @@ that by reading the authoritative local sources directly.
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
 | `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable); and the `env`-block window keys as a **fallback** beneath `/proc` — Claude Code applies them internally so they never reach `/proc/environ`, and a `claude --resume` worker's window is otherwise under-read as 200k. The fallback supplies the value but is marked certain only when the worker started at/after the settings mtime (else `?`, unless usage already proves the window) |
+| `~/.claude/cc-monitor-otel.json` | **optional** per-session effort (`s-effort` column) — an OTel rollup sidecar written by the embedded OTLP sink (see below); absent → column blank, header effort still shows |
 | `/tmp/cc-session/claude.prom` | **optional** cc-session supervisor health (header only; absent → standalone view) |
+
+### Per-session effort (embedded OTel sink)
+
+`effortLevel` above is the **global** CLI setting. Each session's *own* effort (which can differ, and change mid-run) is not in any local file — the only source is Claude Code's own OTel telemetry ([docs](https://code.claude.com/docs/en/monitoring-usage)). When `cc-monitor serve` runs, it starts a loopback OTLP/HTTP receiver (`127.0.0.1:4318`, `--no-otel-sink` to disable) that reads the `api_request` log event (`effort` + cost/tokens/duration, keyed by `session.id`), strips identity attributes, and rolls up to the sidecar above (`0600`). It's a passive in-process side-channel — **no Anthropic auth, no extra API call, no token cost**. Enable telemetry in `settings.json` so every spawn path (RC / `--resume` / GUI) exports:
+
+```json
+{ "env": { "CLAUDE_CODE_ENABLE_TELEMETRY": "1", "OTEL_LOGS_EXPORTER": "otlp",
+           "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+           "OTEL_EXPORTER_OTLP_ENDPOINT": "http://127.0.0.1:4318" } }
+```
+
+Per-session detail stays in the sidecar, **never** in Prometheus (`session.id` is a high-cardinality label). Without telemetry the `s-effort` column is blank and everything else is unchanged.
 
 ## Usage
 

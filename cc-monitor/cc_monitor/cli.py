@@ -20,6 +20,11 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--port", type=int, default=8899)
     s.add_argument("--host", default="127.0.0.1")
     s.add_argument("--refresh", type=int, default=3)
+    # embedded OTLP sink for per-session effort. Loopback only; off => no s-effort column.
+    s.add_argument("--no-otel-sink", dest="otel_sink", action="store_false",
+                   help="disable the embedded OTLP receiver (per-session effort data plane)")
+    s.add_argument("--otel-host", default="127.0.0.1")
+    s.add_argument("--otel-port", type=int, default=4318)
     return p
 
 
@@ -27,7 +32,8 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     cmd = args.cmd or "once"
     if cmd == "serve":
-        serve(args.port, host=args.host, refresh=args.refresh)
+        serve(args.port, host=args.host, refresh=args.refresh,
+              otel_sink=args.otel_sink, otel_host=args.otel_host, otel_port=args.otel_port)
     elif cmd == "html":
         with open(args.path, "w") as fh:
             fh.write(render_html(collect(), refresh=args.refresh))
