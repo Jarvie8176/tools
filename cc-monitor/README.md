@@ -74,15 +74,10 @@ The file is written `0600` (owner-only); a system collector running as **root** 
 non-root collector would need a wider mode — set that in the deploy that enables the export, where
 the collector's uid/gid is known.
 
-**Privacy** — redaction is **on by default** (`redact_default: true`): each session's prompt **and**
-title is masked to `[redacted]` server-side, across the HTML, text, and API/SSE output. The real
-text never leaves the process (nothing to un-blur client-side); structural fields (uuid, status,
-tokens) stay visible so the dashboard is still useful while redacted.
-
-Disable it per invocation with `--no-redact` on `once` / `html` / `serve`, or persistently by setting
-`redact_default: false` (via `POST /api/config` or the config file). Precedence: the CLI flag
-(`--redact` / `--no-redact`, not persisted) > config file > the safe default. Run `cc-monitor
---version` to print the version.
+**Privacy** — set `redact_default: true` (via `POST /api/config` or the config file) to mask each
+session's prompt **and** title to `[redacted]` server-side, across the HTML, text, and API/SSE
+output. The real text never leaves the process (nothing to un-blur client-side); structural fields
+(uuid, status, tokens) stay visible so the dashboard is still useful while redacted.
 
 ## Deploy (systemd --user)
 
