@@ -27,6 +27,9 @@ import os
 # Fixed status label set — always emitted (even at 0) so the series exists for alerting: a missing
 # series and a genuine zero are indistinguishable to an absence-based alert, so we never omit one.
 _STATUSES = ("busy", "active", "orphaned")
+# Derived provenance — a BOUNDED 3-value label. Always emitted at 0 for the same
+# absence-vs-zero reason as _STATUSES.
+_ORIGINS = ("cc-session-managed", "rc-env-spawned", "individual-cli")
 
 
 def _fmt(v) -> str:
@@ -40,10 +43,17 @@ def render_exposition(d: dict) -> str:
     """Format a collect() result as Prometheus text exposition (aggregate gauges)."""
     rows = d["rows"]
     counts = {s: 0 for s in _STATUSES}
+    origins = {o: 0 for o in _ORIGINS}
+    bridged = 0
     for r in rows:
         st = r.get("status")
         if st in counts:
             counts[st] += 1
+        o = r.get("origin")
+        if o in origins:
+            origins[o] += 1
+        if r.get("bridged"):
+            bridged += 1
     ctx_sum = sum(int(r.get("ctx", 0) or 0) for r in rows)
     # worst-case utilisation across sessions with a known (non-zero) window
     pct_max = 0.0
@@ -66,6 +76,10 @@ def render_exposition(d: dict) -> str:
            [f'cc_monitor_sessions{{status="{s}"}} {counts[s]}' for s in _STATUSES])
     metric("cc_monitor_sessions_total", "Total live registry sessions.", "gauge",
            [f"cc_monitor_sessions_total {len(rows)}"])
+    metric("cc_monitor_sessions_by_origin", "Live sessions by derived provenance.",
+           "gauge", [f'cc_monitor_sessions_by_origin{{origin="{o}"}} {origins[o]}' for o in _ORIGINS])
+    metric("cc_monitor_sessions_bridged", "Live sessions carrying a cloud bridge id.", "gauge",
+           [f"cc_monitor_sessions_bridged {bridged}"])
     metric("cc_monitor_context_tokens_sum", "Sum of input-side context tokens across sessions.",
            "gauge", [f"cc_monitor_context_tokens_sum {_fmt(ctx_sum)}"])
     metric("cc_monitor_context_pct_max", "Highest per-session context-window utilisation (0-100).",
@@ -74,6 +88,21 @@ def render_exposition(d: dict) -> str:
         rc = 1 if d["prom"].get("rc_connected") == "1" else 0  # series means "N/A", not "RC down"
         metric("cc_monitor_rc_connected", "cc-session remote-control connectivity (1=connected).",
                "gauge", [f"cc_monitor_rc_connected {rc}"])
+        # Reconciliation drift: the supervisor's real .url worker ledger vs its UNRELIABLE tmux-
+        # scraped `workers` count. Divergence between these and cc_monitor_sessions_total is the
+        # alertable "the GUI's session count is wrong" signal.
+        recon = d.get("recon") or {}
+        metric("cc_monitor_url_ledger", "cc-session worker .url ledger size (managed workers the "
+               "supervisor tracks).", "gauge", [f"cc_monitor_url_ledger {_fmt(recon.get('url_ledger', 0))}"])
+        scraped = recon.get("scraped")
+        if scraped is not None:  # the tmux-pane scrape (fragile — surfaced for drift, never as truth)
+            try:
+                sc = int(scraped)
+            except (TypeError, ValueError):
+                sc = 0
+            metric("cc_monitor_scraped_workers", "cc-session's tmux-scraped worker count (UNRELIABLE "
+                   "— shown for drift vs the registry, never as session truth).", "gauge",
+                   [f"cc_monitor_scraped_workers {sc}"])
     return "\n".join(out) + "\n"  # exposition text ends with a trailing newline
 
 

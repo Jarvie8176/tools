@@ -40,6 +40,25 @@ def _idle(idle_s: float) -> str:
     return f"{int(idle_s)}s" if idle_s < 3600 else f"{int(idle_s / 60)}m"
 
 
+_ORIGIN_ABBR = {"cc-session-managed": "mgd", "rc-env-spawned": "env", "individual-cli": "cli"}
+
+
+def _origin_abbr(origin) -> str:
+    return _ORIGIN_ABBR.get(origin, "?")
+
+
+def _recon(recon: dict) -> str:
+    """One-line reconciliation falloff across the independent population signals. The
+    drift between columns is the point — `scraped` (unreliable) vs the registry is the alert."""
+    if not recon:
+        return ""
+    sc = recon.get("scraped")
+    return (f"recon: registry {recon.get('registry', 0)} · managed {recon.get('managed', 0)}"
+            f" · env-spawned {recon.get('rc_env_spawned', 0)} · individual {recon.get('individual_cli', 0)}"
+            f" · bridged {recon.get('bridged', 0)} · url-ledger {recon.get('url_ledger', 0)}"
+            f" · scraped {sc if sc is not None else '—'}")
+
+
 def _glyph(status: str) -> str:
     """Status glyph, shared by the text and HTML renderers so 'active' never scans like 'busy'."""
     return "⚠" if status == "orphaned" else "●" if status == "busy" else "◐"
@@ -63,10 +82,13 @@ def render_text(d: dict) -> str:
         )
     else:  # standalone: no cc-session here — show the registry count, not a misleading "RC DOWN"
         lines.append(f" registry_sessions:{len(d['rows'])}   (standalone — no cc-session supervisor)")
+    recon = _recon(d.get("recon", {}))
+    if recon:
+        lines.append(" " + recon)
     lines.append("-" * 92)
     pw = cfg["prompt_trunc_text"]
     lines.append(
-        f" {'ST':2s} {'UUID8':8s} {'NAME':6s} {'MODEL':11s} {'EFF':6s} {'CONTEXT':>14s} "
+        f" {'ST':2s} {'UUID8':8s} {'NAME':6s} {'ORIG':4s} {'MODEL':11s} {'EFF':6s} {'CONTEXT':>14s} "
         f"{'CUM i/o':>12s} {'IDLE':>5s}  {'TITLE':22s} {'INIT-PROMPT'.ljust(pw)} LAST-PROMPT"
     )
     lines.append("-" * 150)
@@ -85,7 +107,8 @@ def render_text(d: dict) -> str:
         lastp = trunc(privacy.redact(r["last_prompt"], redact_on), pw) or "—"
         seff = trunc(r.get("session_effort") or "·", 6)  # per-session effort (OTel); '·' = no data
         lines.append(
-            f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {short_model(r['model']):11s} "
+            f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {_origin_abbr(r.get('origin')):4s} "
+            f"{short_model(r['model']):11s} "
             f"{seff:6s} {ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
             f"{title:22s} {initp} {lastp}"
         )
@@ -130,6 +153,8 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     return (
         f"<tr><td><span style='color:{stat_c}'>{_glyph(r['status'])} {_html.escape(r['status'])}</span></td>"
         f"<td class=mono>{_html.escape(r['u8'])}</td><td class='mono small'>{name}</td>"
+        f"<td class=small title='{_html.escape(str(r.get('origin') or ''))}'>{_origin_abbr(r.get('origin'))}"
+        f"{' ·b' if r.get('bridged') else ''}</td>"
         f"<td>{title_html} <span class=small style='opacity:.5'>[{src}]</span></td>"
         f"<td class='mono small' style='color:#7d8590'>{initp}</td>"
         f"<td class='mono small' style='color:#7d8590'>{lastp}</td>"
@@ -172,8 +197,9 @@ def render_html(d: dict, refresh: int = 3) -> str:
 </style>
 <h1>cc-monitor &nbsp;<span class=small>{_ts(d['ts'])} &middot; auto-refresh {refresh}s &middot; effort {effort}</span></h1>
 <div class=small>{header}</div>
+<div class=small style='margin-top:4px'>{_html.escape(_recon(d.get('recon', {})))}</div>
 <table>
-<tr><th>status</th><th>uuid8</th><th>name</th><th>title</th><th>initial-prompt</th><th>last-prompt</th><th>model</th><th>s-effort</th>
+<tr><th>status</th><th>uuid8</th><th>name</th><th>origin</th><th>title</th><th>initial-prompt</th><th>last-prompt</th><th>model</th><th>s-effort</th>
     <th>context (input-side, #27361-safe)</th><th>cum in/out</th><th>idle</th><th>bridge (cloud)</th></tr>
 {rows}
 </table>

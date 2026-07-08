@@ -10,9 +10,30 @@ never used as session truth.
 """
 from __future__ import annotations
 
+import glob
 import os
 
 from . import paths
+
+
+def managed_ledger(ccsession_dir: str | None = None) -> set[str]:
+    """The supervisor's worker ledger — the set of session ``uuid8``s that have a ``claude-*.url``
+    file in the cc-session dir (cc-session writes one per worker it manages). Empty when cc-session
+    isn't on this host. The uuid8 is the **second-to-last** dash segment of
+    ``claude-<host>-<uuid8>-<hash>.url`` — taken from the end so a hostname containing dashes can't
+    shift it. ``claude.url`` (the RC's own, no dashes) and the supervisor's ``cc-*.url`` don't match
+    the ``claude-*`` worker shape and are excluded.
+
+    Distinct from ``read()``'s scraped ``workers`` count: this ledger is a real per-worker artefact,
+    whereas ``workers`` is an unreliable tmux-pane scrape — the drift between them is exactly what
+    the reconciliation surfaces."""
+    d = ccsession_dir or paths.CCSESSION_DIR
+    ledger = set()
+    for p in glob.glob(os.path.join(d, "claude-*.url")):
+        parts = os.path.basename(p)[:-4].split("-")  # drop ".url", split on '-'
+        if len(parts) >= 4:  # claude, <host…>, <uuid8>, <hash>
+            ledger.add(parts[-2])
+    return ledger
 
 
 def read(ccsession_dir: str | None = None) -> dict | None:

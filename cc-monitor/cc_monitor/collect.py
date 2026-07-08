@@ -107,6 +107,18 @@ def _status(registry_status, status_ts: float, activity_ts: float, idle_s: float
     return "busy" if idle_s < gap else "active"
 
 
+def _origin(managed: bool, entrypoint) -> str:
+    """Derive a session's provenance from two orthogonal signals: the cc-session worker
+    ledger (``managed``) and the registry ``entrypoint``. A ``.url`` ledger hit is authoritative —
+    it's a real supervisor-managed worker. Otherwise ``sdk-cli`` (RC/GUI env-spawned) vs everything
+    else (a human ``cli`` TUI not under cc-session)."""
+    if managed:
+        return "cc-session-managed"
+    if entrypoint == "sdk-cli":
+        return "rc-env-spawned"
+    return "individual-cli"
+
+
 def collect(now: float | None = None) -> dict:
     """Return ``{"rows": [...], "prom": {...}, "ts": epoch}`` — one row per live session."""
     now = time.time() if now is None else now
@@ -123,6 +135,10 @@ def collect(now: float | None = None) -> dict:
     # or the sink never wrote. Read once; join per row. Absent -> per-session effort column stays
     # blank and the GLOBAL settings effortLevel header still shows (optional enrichment, like prom).
     otel_map = otel.read()
+    # cc-session's worker .url ledger (uuid8 set) — the authoritative "managed" signal, read once
+    # and joined per row. Empty when cc-session isn't here (all sessions then fall to origin by
+    # entrypoint). Distinct from the scraped `workers` count in `prom` (unreliable tmux scrape).
+    ledger = ccsession.managed_ledger()
     rows = []
     seen_paths = set()
     for reg_path in glob.glob(os.path.join(paths.SESSIONS_DIR, "*.json")):
@@ -159,11 +175,14 @@ def collect(now: float | None = None) -> dict:
             window.read_model_env(pid), settings_env, info.get("model"),
             info.get("peak_ctx", 0), settings_trusted,
         )
+        managed = sid[:8] in ledger  # a cc-session .url ledger hit — authoritative "managed" signal
         info.update({
             "session_id": sid, "u8": sid[:8], "pid": pid,
             "name": reg.get("name", "-"),
             "bridge_id": bridge,
             "bridge_short": bridge.replace("session_", "s_")[:14] or "-",
+            "managed": managed, "bridged": bool(bridge),
+            "origin": _origin(managed, reg.get("entrypoint")),
             # an orphaned (present-but-not-reachable, e.g. defunct) process would otherwise read
             # as "active" (registered, and its transcript merely went silent) — surface it so a
             # listed-but-dead session is not mistaken for a live, reachable one.
@@ -182,10 +201,23 @@ def collect(now: float | None = None) -> dict:
     for dead in [p for p in _PARSE_CACHE if p not in seen_paths]:  # bound cache to live sessions
         del _PARSE_CACHE[dead]
     prom = ccsession.read()  # None when cc-session isn't on this host (optional enrichment)
+    # Reconciliation: the falloff across independent population signals. Each column
+    # counts a different lens on "how many sessions", and the DRIFT between them is the point — the
+    # GUI's unstable "workers" scrapes `scraped`, while the truth is the registry. `url_ledger` can
+    # exceed `managed` when the ledger holds a stale/backbone entry with no live session.
+    recon = {
+        "registry": len(rows),
+        "managed": sum(1 for r in rows if r["managed"]),
+        "rc_env_spawned": sum(1 for r in rows if r["origin"] == "rc-env-spawned"),
+        "individual_cli": sum(1 for r in rows if r["origin"] == "individual-cli"),
+        "bridged": sum(1 for r in rows if r["bridged"]),
+        "url_ledger": len(ledger),  # supervisor's worker .url ledger (may exceed live/managed)
+        "scraped": (prom or {}).get("workers"),  # cc-session tmux-scraped count (unreliable)
+    }
     return {
         "rows": rows, "prom": prom or {}, "cc_session": prom is not None,
         "effort": settings.effort_level(),  # global CLI effort (settings.json); None if unreadable
-        "ts": now,
+        "recon": recon, "ts": now,
     }
 
 
