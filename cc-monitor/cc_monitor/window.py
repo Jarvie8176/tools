@@ -22,7 +22,9 @@ BASELINE = 200_000
 ONE_M = 1_000_000
 _1M_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 # Exact keys only — a prefix match would also capture ANTHROPIC_DEFAULT_HEADERS (auth headers).
-_WANTED_ENV = frozenset({
+# Public: settings.model_env() filters the settings.json `env` block by the SAME set, so the two
+# window sources (proc environ + settings env-block) stay in lockstep.
+MODEL_ENV_KEYS = frozenset({
     "ANTHROPIC_DEFAULT_OPUS_MODEL",
     "ANTHROPIC_DEFAULT_SONNET_MODEL",
     "ANTHROPIC_DEFAULT_HAIKU_MODEL",
@@ -47,7 +49,7 @@ def read_model_env(pid, proc_dir: str | None = None):
     env = {}
     for kv in raw.split("\0"):
         key, sep, val = kv.partition("=")
-        if sep and key in _WANTED_ENV:
+        if sep and key in MODEL_ENV_KEYS:
             env[key] = val
     return env
 
@@ -89,3 +91,31 @@ def resolve_window(env, model, peak_ctx):
     if (peak_ctx or 0) > win:  # observed usage overrides a too-small INFERRED window
         win, certain = ONE_M, True
     return win, certain
+
+
+def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted):
+    """Full window resolution layering the settings.json ``env`` block under the ``/proc`` env.
+
+    The settings.json ``env`` block (e.g. ``ANTHROPIC_DEFAULT_OPUS_MODEL=…[1m]``) is applied
+    INTERNALLY by Claude Code, so it never reaches ``/proc/<pid>/environ`` — a ``claude --resume``
+    worker's exec env lacks it yet the worker still runs at the settings window. Reading ``/proc``
+    alone under-reports such a worker as 200k. But settings.json is a GLOBAL, TIME-VARYING source,
+    so it grants a WINDOW VALUE freely and CERTAINTY only with evidence:
+
+    - ``proc_env`` is authoritative (exec-time evidence). If it already resolves a window > baseline
+      (a spawner ``[1m]``/explicit ceiling, or peak proof), that answer stands — settings never
+      overrides observed evidence.
+    - ``proc_env is None`` (unreadable: permission/hidepid/gone) stays unknowable. We do NOT
+      fabricate certainty from global settings for an env we couldn't observe — it may carry an
+      unseen spawner override. Falls back to peak-only (``'?'`` unless usage proves it).
+    - Otherwise (proc readable, resolved to plain baseline) the settings block may RAISE the window.
+      That raise is ``certain`` only if ``settings_trusted`` (the worker demonstrably started under
+      the current settings — mtime <= start) OR peak already proves the larger window; else ``'?'``.
+    """
+    win, certain = resolve_window(proc_env, model, peak_ctx)
+    if proc_env is None or win != BASELINE or not settings_env:
+        return win, certain  # unreadable / already-decided / nothing to add
+    s_win, _ = resolve_window({**settings_env, **proc_env}, model, peak_ctx)
+    if s_win <= win:
+        return win, certain  # settings only ever raises here; a lower global ceiling needs evidence
+    return s_win, bool(settings_trusted or (peak_ctx or 0) > BASELINE)

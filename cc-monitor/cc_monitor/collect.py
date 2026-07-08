@@ -11,7 +11,7 @@ import json
 import os
 import time
 
-from . import ccsession, config, paths, titles, transcript, window
+from . import ccsession, config, paths, settings, titles, transcript, window
 
 # Parse cache keyed by path -> ((mtime, size), result). Transcripts are read fully to compute the
 # peak-context high-water-mark, and the live set can be hundreds of MB; without this, the server
@@ -96,6 +96,13 @@ def collect(now: float | None = None) -> dict:
     now = time.time() if now is None else now
     overrides = titles.load()
     gap = config.load()["busy_idle_gap"]
+    # settings.json `env`-block model/context keys — global, so read once. These are applied
+    # internally by Claude Code and are absent from /proc/environ, so they act as the fallback
+    # window signal for workers (e.g. `claude --resume`) whose exec env lacks them. Its mtime gates
+    # certainty: a worker that started before the settings were last written may run OLD settings,
+    # so we only TRUST the fallback for workers that started at/after this mtime (window.resolve).
+    settings_env = settings.model_env()
+    settings_mtime = settings.file_mtime()
     rows = []
     seen_paths = set()
     for reg_path in glob.glob(os.path.join(paths.SESSIONS_DIR, "*.json")):
@@ -120,8 +127,17 @@ def collect(now: float | None = None) -> dict:
         #        sampled would otherwise show a negative idle (e.g. "-1s") for an active session
         status_ts = (reg.get("statusUpdatedAt", 0) or 0) / 1000  # registry epoch-ms -> s
         bridge = reg.get("bridgeSessionId") or ""
-        win, win_certain = window.resolve_window(
-            window.read_model_env(pid), info.get("model"), info.get("peak_ctx", 0)
+        # Trust the settings fallback only if this worker demonstrably started under the current
+        # settings (its startedAt is at/after the settings mtime). Missing startedAt or a settings
+        # edit after start -> untrusted -> the fallback still supplies the window value but flags '?'.
+        started_at = reg.get("startedAt")
+        settings_trusted = (
+            settings_mtime is not None and started_at is not None
+            and settings_mtime <= started_at / 1000
+        )
+        win, win_certain = window.resolve(
+            window.read_model_env(pid), settings_env, info.get("model"),
+            info.get("peak_ctx", 0), settings_trusted,
         )
         info.update({
             "session_id": sid, "u8": sid[:8], "pid": pid,
@@ -142,7 +158,11 @@ def collect(now: float | None = None) -> dict:
     for dead in [p for p in _PARSE_CACHE if p not in seen_paths]:  # bound cache to live sessions
         del _PARSE_CACHE[dead]
     prom = ccsession.read()  # None when cc-session isn't on this host (optional enrichment)
-    return {"rows": rows, "prom": prom or {}, "cc_session": prom is not None, "ts": now}
+    return {
+        "rows": rows, "prom": prom or {}, "cc_session": prom is not None,
+        "effort": settings.effort_level(),  # global CLI effort (settings.json); None if unreadable
+        "ts": now,
+    }
 
 
 def title_of(row: dict) -> tuple[str, str]:

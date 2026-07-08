@@ -52,7 +52,8 @@ def _ctx_of(usage: dict) -> int:
 
 def empty(mtime: float = 0.0) -> dict:
     return {
-        "model": None, "ctx": 0, "peak_ctx": 0, "custom_title": "", "last_prompt": "",
+        "model": None, "ctx": 0, "peak_ctx": 0, "custom_title": "",
+        "initial_prompt": "", "last_prompt": "",
         "cum_input": 0, "cum_output": 0, "cum_cache": 0, "full": False,
         "mtime": mtime, "size": 0,
     }
@@ -61,7 +62,7 @@ def empty(mtime: float = 0.0) -> dict:
 def parse(path: str, full: bool = True) -> dict:
     """Extract model / context / peak / cumulative tokens / title / last-prompt from a JSONL."""
     last_model = last_usage = None
-    custom_title = last_user = None
+    custom_title = first_user = last_user = None
     peak_ctx = cum_input = cum_output = cum_cache = 0
     try:  # stat once, up front — a transcript can rotate/vanish mid-read (hot file)
         size = os.path.getsize(path)
@@ -92,6 +93,8 @@ def parse(path: str, full: bool = True) -> dict:
                         continue
                     txt = user_text(ev.get("message", {}).get("content"))
                     if txt:
+                        if first_user is None:
+                            first_user = txt  # opening human prompt (stable identity; keep first)
                         last_user = txt  # actual last user prompt (overwrite)
                     continue
                 if etype != "assistant":
@@ -119,6 +122,7 @@ def parse(path: str, full: bool = True) -> dict:
         "ctx": _ctx_of(last_usage) if last_usage else 0,
         "peak_ctx": peak_ctx,
         "custom_title": " ".join(custom_title.split())[:MAX_TEXT] if custom_title else "",
+        "initial_prompt": " ".join(first_user.split())[:MAX_TEXT] if first_user else "",
         "last_prompt": " ".join(last_user.split())[:MAX_TEXT] if last_user else "",
         "cum_input": cum_input, "cum_output": cum_output, "cum_cache": cum_cache,
         "full": do_full, "mtime": mtime, "size": size,

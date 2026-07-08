@@ -21,6 +21,7 @@ class FakeClaude:
         for d in (self.sessions, self.projects, self.proc, self.ccsession):
             os.makedirs(d, exist_ok=True)
         self.titles_file = os.path.join(root, "titles.json")
+        self.settings_file = os.path.join(root, "settings.json")
 
     def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
         d = os.path.join(self.proc, str(pid))
@@ -44,7 +45,7 @@ class FakeClaude:
         return path
 
     def registry(self, pid, session_id, cwd, name="cc-xx", status=None, bridge=None,
-                 procstart=None, status_updated_at=None):
+                 procstart=None, status_updated_at=None, started_at=None):
         rec = {"pid": pid, "sessionId": session_id, "cwd": cwd, "name": name}
         if status:
             rec["status"] = status
@@ -54,11 +55,17 @@ class FakeClaude:
             rec["procStart"] = procstart
         if status_updated_at is not None:
             rec["statusUpdatedAt"] = status_updated_at
+        if started_at is not None:
+            rec["startedAt"] = started_at
         with open(os.path.join(self.sessions, f"{pid}.json"), "w") as fh:
             json.dump(rec, fh)
 
     def titles(self, mapping: dict):
         with open(self.titles_file, "w") as fh:
+            json.dump(mapping, fh)
+
+    def settings(self, mapping: dict):
+        with open(self.settings_file, "w") as fh:
             json.dump(mapping, fh)
 
 
@@ -70,6 +77,9 @@ def claude(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PROC_DIR", fc.proc)
     monkeypatch.setattr(paths, "CCSESSION_DIR", fc.ccsession)
     monkeypatch.setattr(paths, "TITLES_FILE", fc.titles_file)
+    # Point at a fake (absent) settings.json so effort reads are hermetic — a test opts in by
+    # calling fc.settings({...}); default is unreadable -> effort None (no real ~/.claude read).
+    monkeypatch.setattr(paths, "SETTINGS_FILE", fc.settings_file)
     return fc
 
 

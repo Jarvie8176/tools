@@ -27,7 +27,7 @@ from .collect import collect
 log = logging.getLogger("cc-monitor")
 
 # Free-text fields masked when redact_default is on — same set the HTML/text renderers redact.
-_REDACT_FIELDS = ("custom_title", "override_title", "last_prompt")
+_REDACT_FIELDS = ("custom_title", "override_title", "initial_prompt", "last_prompt")
 
 # Row fields exposed over the API. `mtime` is remapped to `last_activity_ts` (absolute) so the
 # client can tick idle locally without a server push; `idle_s`/`ts` are deliberately excluded
@@ -36,7 +36,8 @@ _API_FIELDS = (
     "session_id", "u8", "pid", "name", "model", "status",
     "ctx", "peak_ctx", "win", "win_certain",
     "cum_input", "cum_output", "cum_cache", "full",
-    "bridge_id", "bridge_short", "custom_title", "override_title", "last_prompt",
+    "bridge_id", "bridge_short", "custom_title", "override_title",
+    "initial_prompt", "last_prompt",
 )
 
 
@@ -55,7 +56,8 @@ def serialize(d: dict) -> bytes:
         s["last_activity_ts"] = r.get("mtime")
         sessions.append(s)
     return json.dumps(
-        {"sessions": sessions, "prom": d["prom"], "cc_session": d.get("cc_session", False)},
+        {"sessions": sessions, "prom": d["prom"], "cc_session": d.get("cc_session", False),
+         "effort": d.get("effort")},
         separators=(",", ":"),
     ).encode()
 
