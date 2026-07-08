@@ -15,7 +15,7 @@ that by reading the authoritative local sources directly.
 
 | Source | Provides |
 |---|---|
-| `~/.claude/sessions/<pid>.json` | session discovery (`pid`, `sessionId`, `procStart`, `cwd`, `name`) for **both** cc-session `--resume` workers and RC env-spawned workers. *Note: recent Claude Code versions dropped the `status`/`bridgeSessionId` fields this once read — `busy`/`idle` is now derived from `/proc` CPU activity + transcript mtime instead.* |
+| `~/.claude/sessions/<pid>.json` | session discovery (`pid`, `sessionId`, `procStart`, `cwd`, `name`) for **both** cc-session `--resume` workers and RC env-spawned workers. *Note: recent Claude Code versions dropped the `status`/`bridgeSessionId` fields this once read — `busy`/`idle` now falls through to a transcript-mtime silence gap (the registry `status` is still honoured when present and fresh); `/proc` only validates process liveness / zombie / PID reuse.* |
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `/proc/<pid>/environ` | true context window (200k vs 1M) via the worker's `ANTHROPIC_DEFAULT_*_MODEL` `[1m]` default |
 | `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable); and the `env`-block window keys as a **fallback** beneath `/proc` — Claude Code applies them internally so they never reach `/proc/environ`, and a `claude --resume` worker's window is otherwise under-read as 200k. The fallback supplies the value but is marked certain only when the worker started at/after the settings mtime (else `?`, unless usage already proves the window) |
@@ -75,16 +75,18 @@ and would leak session identity into the TSDB): `cc_monitor_sessions{status=...}
 For the fleet, prefer the **textfile** path over scraping `/metrics`: set
 `CC_MONITOR_METRICS_FILE` to a file under the Alloy textfile-collector dir and cc-monitor writes
 it atomically each refresh (aligned with the fleet's textfile convention, not an HTTP scrape).
-The file is written `0600` (owner-only); a system collector running as **root** reads it fine. A
-non-root collector would need a wider mode — set that in the deploy that enables the export, where
-the collector's uid/gid is known.
+The unit pins `UMask=0022`, so the `.prom` lands world-readable `0644` — a node-exporter / Alloy
+textfile collector (typically running as `nobody`) reads it off disk. This is distinct from the
+per-session OTel **sidecar** (`~/.claude/cc-monitor-otel.json`), which is `0600` because it holds
+per-session cost.
 
 ### Runtime config
 
 `serve` reads a schema-gated config each refresh, so edits apply live (no restart).
 Precedence: built-in defaults ← `~/.claude/cc-monitor-config.json` (written by `POST /api/config`)
-← env var (ops escape hatch). Writes are clamped to range, coerced to type, and atomic; a corrupt
-file falls back to defaults rather than crashing a render.
+← env var (ops escape hatch) ← per-invocation CLI flag (e.g. `--redact`, not persisted). Writes are
+clamped to range, coerced to type, and atomic; a corrupt file falls back to defaults rather than
+crashing a render.
 
 | Key | Default | Range | Effect |
 |---|---|---|---|
@@ -93,13 +95,17 @@ file falls back to defaults rather than crashing a render.
 | `ctx_crit_pct` | `80` | 0–100 | context-usage colour turns red above this |
 | `title_trunc_text` / `prompt_trunc_text` | `22` / `40` | 4–512 | text-mode truncation widths |
 | `title_trunc_html` / `prompt_trunc_html` | `48` / `70` | 4–512 | HTML-mode truncation widths |
-| `redact_default` | `false` | — | mask each session's prompt + title server-side (see Privacy) |
+| `redact_default` | `true` | — | mask each session's prompt + title server-side — safe-by-default (see Privacy) |
 | `active_gap` | `900` | 1–86400 | *reserved — defined but not yet applied* |
 
-**Privacy** — set `redact_default: true` (via `POST /api/config` or the config file) to mask each
-session's prompt **and** title to `[redacted]` server-side, across the HTML, text, and API/SSE
-output. The real text never leaves the process (nothing to un-blur client-side); structural fields
-(uuid, status, tokens) stay visible so the dashboard is still useful while redacted.
+**Privacy** — redaction is **on by default** (`redact_default: true`): each session's prompt **and**
+title is masked to `[redacted]` server-side, across the HTML, text, and API/SSE output. The real
+text never leaves the process (nothing to un-blur client-side); structural fields (uuid, status,
+tokens) stay visible so the dashboard is still useful while redacted.
+
+Disable it per invocation with `--no-redact` on `once` / `html` / `serve` (or force it on with
+`--redact`), or persistently by setting `redact_default: false`. The CLI flag is not persisted and
+outranks the config file. `cc-monitor --version` prints the version.
 
 ## Deploy (systemd --user)
 
