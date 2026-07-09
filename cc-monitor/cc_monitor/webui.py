@@ -100,6 +100,7 @@ function fmtK(n){ n = n||0;
   return n >= 1000 ? (n/1000).toFixed(1)+"k" : String(n); }
 function shortModel(m){ return (m||"-").replace("claude-",""); }
 function fmtIdle(s){ s = Math.max(0, Math.floor(s)); return s < 3600 ? s+"s" : Math.floor(s/60)+"m"; }
+function clip(s, n){ s = s || ""; return s.length > n ? s.slice(0, n-1) + "…" : s; }  // mirrors render.trunc — cap free-text so a long prompt can't push the right-hand columns off-screen
 function originAbbr(o){ return ORIGIN_ABBR[o] || "?"; }
 function titleOf(r){                                // override > custom-title > cloud-side
   if (r.override_title) return {t: r.override_title, src: "override"};
@@ -148,16 +149,18 @@ function paintOrigin(td, r){
 }
 function paintRow(tr, r){
   const c = tr._c, ti = titleOf(r);
+  const pw = CONFIG.prompt_trunc_html || 70, tw = CONFIG.title_trunc_html || 48;  // caps from runtime config
   tr.className = r.status === "busy" ? "busy" : "";
   const g = c.status; g.textContent = glyph(r.status) + " " + r.status; g.style.color = statusColor(r.status);
   setText(c.u8, r.u8 || ""); setText(c.name, r.name || "-");
   paintOrigin(c.origin, r);
-  c.title.textContent = "";
+  c.title.textContent = ""; c.title.title = ti.t || "";   // full title on hover
   const ts = document.createElement("span");
-  if (ti.t){ ts.textContent = ti.t; } else { ts.textContent = "— (cloud-side)"; ts.className = "dim"; }
+  if (ti.t){ ts.textContent = clip(ti.t, tw); } else { ts.textContent = "— (cloud-side)"; ts.className = "dim"; }
   const tsrc = document.createElement("span"); tsrc.className = "small dim"; tsrc.textContent = " [" + ti.src + "]";
   c.title.appendChild(ts); c.title.appendChild(tsrc);
-  setText(c.initp, r.initial_prompt || "—"); setText(c.lastp, r.last_prompt || "—");
+  setText(c.initp, clip(r.initial_prompt, pw) || "—"); c.initp.title = r.initial_prompt || "";
+  setText(c.lastp, clip(r.last_prompt, pw) || "—");     c.lastp.title = r.last_prompt || "";
   setText(c.model, shortModel(r.model));
   setText(c.seff, r.session_effort || "·"); c.seff.className = r.session_effort ? "mono" : "small dim";
   paintCtx(c.ctx, r);
@@ -296,7 +299,7 @@ function loadConfig(){                                // schema + effective valu
   Promise.all([
     fetch("/api/config").then(r => r.json()),
     fetch("/api/config/schema").then(r => r.json()),
-  ]).then(([c, s]) => { applyConfig(c); SCHEMA_META = s || {}; buildSettings(); }).catch(()=>{});
+  ]).then(([c, s]) => { applyConfig(c); SCHEMA_META = s || {}; buildSettings(); reconcile(); }).catch(()=>{});
 }
 $("cfgbtn").addEventListener("click", () => { const s = $("settings"); s.hidden = !s.hidden; });
 loadConfig();

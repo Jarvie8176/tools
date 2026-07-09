@@ -49,6 +49,16 @@ def test_spa_has_settings_panel():
     assert 'reconcile(); buildSettings()' in p
 
 
+def test_spa_truncates_free_text_columns():
+    # a long initial/last prompt must be clipped client-side — otherwise a nowrap cell grows to the
+    # full text width and pushes the right-hand columns (model … bridge) off-screen. Mirrors
+    # render.trunc, honouring the prompt/title_trunc_html config caps.
+    p = _page()
+    assert "function clip(" in p
+    assert "clip(r.initial_prompt" in p and "clip(r.last_prompt" in p
+    assert "prompt_trunc_html" in p and "title_trunc_html" in p
+
+
 def test_spa_js_is_valid_syntax():
     node = shutil.which("node")
     if not node:  # node ships on CI ubuntu runners + dev host; skip where absent rather than fail
