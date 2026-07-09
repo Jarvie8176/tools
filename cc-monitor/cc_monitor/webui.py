@@ -141,6 +141,20 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  .sgrp h3{font:600 12px var(--f-sans);color:var(--t1);margin:0 0 8px}
  .srow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:6px 0;font-size:12.5px}
  .switch{cursor:pointer}
+ .rangeval{font:600 12px var(--f-mono);color:var(--t1);min-width:34px;text-align:right}
+ /* dual-handle range on one axis: two overlaid sliders + a tri-colour fill (ok / warn / danger) */
+ .dual{position:relative;height:26px;margin:10px 2px 4px}
+ .dual .dtrack{position:absolute;top:10px;left:0;right:0;height:6px;background:var(--ok);border-radius:3px}
+ .dual .seg{position:absolute;top:10px;height:6px}
+ .dual .dwarn{background:var(--warn)} .dual .ddgr{background:var(--dgr);border-radius:0 3px 3px 0}
+ .dual input[type=range]{position:absolute;top:2px;left:0;width:100%;margin:0;height:22px;
+   background:none;pointer-events:none;-webkit-appearance:none;appearance:none}
+ .dual input[type=range]::-webkit-slider-runnable-track{background:transparent;height:22px}
+ .dual input[type=range]::-moz-range-track{background:transparent;height:22px}
+ .dual input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;
+   width:16px;height:16px;border-radius:50%;background:var(--panel);border:2px solid var(--info);cursor:pointer;margin-top:0}
+ .dual input[type=range]::-moz-range-thumb{pointer-events:auto;
+   width:16px;height:16px;border-radius:50%;background:var(--panel);border:2px solid var(--info);cursor:pointer}
  #sheet{position:fixed;left:0;right:0;bottom:0;max-width:600px;margin:0 auto;background:var(--panel);
    border:1px solid var(--bd);border-bottom:0;border-radius:16px 16px 0 0;transform:translateY(100%);
    transition:transform .2s;z-index:22;max-height:86vh;overflow:auto}
@@ -198,11 +212,18 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  </div>
  <div class=sgrp><h3>外观</h3>
   <div class=srow><label for=sw-theme>亮色主题</label><input type=checkbox id=sw-theme class=switch></div>
-  <div class=srow><label for=in-lines>prompt 摘要行数</label><input type=range id=in-lines min=1 max=4 step=1 style=width:120px></div>
+  <div class=srow><label for=in-lines>prompt 摘要行数</label>
+   <span style="display:flex;align-items:center;gap:8px">
+    <input type=range id=in-lines min=1 max=4 step=1 style=width:110px><b id=lines-val class=rangeval></b>
+   </span></div>
  </div>
  <div class=sgrp><h3>context 阈值 (%)</h3>
-  <div class=srow><label for=in-warn>关注（琥珀）</label><input type=number id=in-warn min=0 max=100 style=width:72px></div>
-  <div class=srow><label for=in-danger>危险（红）</label><input type=number id=in-danger min=0 max=100 style=width:72px></div>
+  <div class=dual>
+   <div class=dtrack></div><div class="seg dwarn" id=d-warn></div><div class="seg ddgr" id=d-dgr></div>
+   <input type=range id=in-warn min=0 max=100 step=1 aria-label="关注阈值">
+   <input type=range id=in-danger min=0 max=100 step=1 aria-label="危险阈值">
+  </div>
+  <div class=legend><span style=color:var(--warn)>关注</span> <b id=warnval class=mono></b>% 起 · <span style=color:var(--dgr)>危险</span> <b id=dangerval class=mono></b>% 起（拖动两个滑块）</div>
  </div>
  <div class=sgrp><h3>列（标准表格）</h3>
   <div class=srow><label for=col-prompt>最新 prompt</label><input type=checkbox id=col-prompt class=switch></div>
@@ -562,14 +583,24 @@ function syncSettingsUI(){
   $("sw-reveal").checked = revealOn;
   $("sw-theme").checked = prefs.theme === "light";
   $("in-lines").value = prefs.promptLines;
-  $("in-warn").value = prefs.ctxWarn;
-  $("in-danger").value = prefs.ctxDanger;
   $("col-prompt").checked = prefs.cols.prompt;
   $("col-ctx").checked = prefs.cols.ctx;
   $("col-idle").checked = prefs.cols.idle;
+  applyLines(); paintDual();
 }
 function applyTheme(){ document.body.classList.toggle("light", prefs.theme === "light"); }
-function applyLines(){ document.documentElement.style.setProperty("--pl", prefs.promptLines); }
+function applyLines(){
+  document.documentElement.style.setProperty("--pl", prefs.promptLines);
+  $("lines-val").textContent = prefs.promptLines + " 行";
+}
+// dual-handle ctx threshold slider: warn <= danger; tri-colour fill (ok 0..warn / warn..danger / danger..100)
+function paintDual(){
+  const w = prefs.ctxWarn, dg = prefs.ctxDanger;
+  $("in-warn").value = w; $("in-danger").value = dg;
+  $("warnval").textContent = w; $("dangerval").textContent = dg;
+  $("d-warn").style.left = w + "%"; $("d-warn").style.width = Math.max(0, dg - w) + "%";
+  $("d-dgr").style.left = dg + "%"; $("d-dgr").style.width = Math.max(0, 100 - dg) + "%";
+}
 
 // ============================ idle local tick ============================
 function tickEl(elm){ const ts = +elm.dataset.ts || 0; elm.textContent = ts ? fmtIdle(nowS() - ts) : "—"; }
@@ -589,8 +620,12 @@ $("sheet-x").onclick = closeSheet; $("sheet-bd").onclick = closeSheet;
 $("sw-reveal").onchange = (e) => { revealOn = e.target.checked; postConfig({redact_default: !revealOn}); };
 $("sw-theme").onchange = (e) => { prefs.theme = e.target.checked ? "light" : "dark"; savePrefs(); applyTheme(); };
 $("in-lines").oninput = (e) => { prefs.promptLines = +e.target.value; savePrefs(); applyLines(); renderView(); };
-$("in-warn").onchange = (e) => { prefs.ctxWarn = Math.max(0, Math.min(100, +e.target.value||0)); savePrefs(); renderView(); };
-$("in-danger").onchange = (e) => { prefs.ctxDanger = Math.max(0, Math.min(100, +e.target.value||0)); savePrefs(); renderView(); };
+$("in-warn").oninput = (e) => {                                   // warn can't pass danger
+  prefs.ctxWarn = Math.min(Math.max(0, +e.target.value||0), prefs.ctxDanger);
+  savePrefs(); paintDual(); renderView(); };
+$("in-danger").oninput = (e) => {                                 // danger can't drop below warn
+  prefs.ctxDanger = Math.max(Math.min(100, +e.target.value||0), prefs.ctxWarn);
+  savePrefs(); paintDual(); renderView(); };
 ["prompt","ctx","idle"].forEach(k => $("col-"+k).onchange = (e) => { prefs.cols[k] = e.target.checked; savePrefs(); renderView(); });
 $("set-reset").onclick = () => { prefs = Object.assign({}, DEFAULTS); prefs.cols = Object.assign({}, DEFAULTS.cols); savePrefs(); applyTheme(); applyLines(); syncSettingsUI(); renderView(); };
 window.addEventListener("resize", renderView);
