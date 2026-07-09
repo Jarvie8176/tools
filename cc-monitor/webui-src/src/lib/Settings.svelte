@@ -27,17 +27,18 @@
   onkeydown={(e) => e.key === 'Escape' && closeSettings()}
 >
   <div
-    class="cc-scroll max-h-[88vh] w-full max-w-[440px] overflow-auto rounded-[14px] border border-bd bg-panel px-5 pb-5 pt-[18px]"
+    class="flex max-h-[88vh] w-full max-w-[440px] flex-col rounded-[14px] border border-bd bg-panel"
     role="dialog" tabindex="-1"
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
   >
-    <div class="mb-4 flex items-center">
+    <div class="flex items-center px-5 pb-3 pt-[18px]">
       <div class="text-[14px] font-semibold text-t1">设置</div>
       <div class="flex-1"></div>
       <button class="flex size-[30px] cursor-pointer items-center justify-center rounded-lg border border-bd2 font-mono text-[13px] text-t3" onclick={closeSettings} aria-label="关闭">✕</button>
     </div>
 
+    <div class="cc-scroll min-h-0 flex-1 overflow-auto px-5 pb-1">
     {#if ui.confirmClose}
       <div class="mb-3.5 rounded-[10px] border border-warn bg-warnbg px-3.5 py-3">
         <div class="text-[12.5px] font-medium text-t1">有未保存的修改</div>
@@ -152,9 +153,10 @@
         </div>
       {/each}
     </div>
+    </div><!-- /scroll -->
 
-    <!-- save / reset -->
-    <div class="mt-5 flex items-center gap-2.5 border-t border-bd2 pt-3.5">
+    <!-- save / reset（浮动固定底部） -->
+    <div class="flex items-center gap-2.5 rounded-b-[14px] border-t border-bd2 bg-panel px-5 py-3.5">
       <button class="cursor-pointer rounded-[7px] border border-bd2 px-3.5 py-2 text-[12px] font-medium text-t3" onclick={resetSettings}>恢复默认</button>
       <div class="flex-1"></div>
       {#if dirty}<span class="text-[10.5px] text-warn">未保存</span>{/if}
