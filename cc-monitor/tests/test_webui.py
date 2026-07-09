@@ -27,13 +27,27 @@ def test_spa_never_uses_innerhtml():
     assert "innerHTML" not in _page()
 
 
-def test_spa_has_expected_columns_and_controls():
+def test_spa_has_core_fields_and_controls():
+    # Redesign (#1944): zero-horizontal-scroll — the 5 importance-ordered core fields are always
+    # present (status -> name -> latest prompt -> context -> idle); the rest drill down into an
+    # expand panel. Assert the new invariants: core columns, density presets, settings, endpoints.
     p = _page()
-    for col in ("status", "uuid8", "name", "title", "initial-prompt", "last-prompt",
-                "model", "s-effort", "context", "cum in/out", "idle", "bridge"):
-        assert col in p, f"missing column {col!r}"
-    assert 'id=filter' in p and 'id=sort' in p        # client-side filter + sort controls
-    assert '/api/config' in p                         # picks up runtime ctx colour thresholds
+    for label in ("status", "名称", "最新 prompt", "context", "idle"):
+        assert label in p, f"missing core field {label!r}"
+    for density in ("巡检", "标准", "排查"):               # three density presets (US4)
+        assert density in p, f"missing density preset {density!r}"
+    assert 'id=filter' in p                            # client-side text filter retained
+    assert 'id=settings' in p and 'id=gear' in p       # settings drawer (reveal / theme / thresholds)
+    assert '/api/config' in p and '/api/titles' in p   # config read/write + rename writeback (US6)
+    assert 'line-clamp' in p                           # CJK visual truncation, not char count (US3)
+
+
+def test_spa_renders_redaction_marker_as_masked_block():
+    # A redacted free-text field arrives as the fixed marker; the page must render it masked
+    # (never place the marker text raw, and never inject markup for it).
+    p = _page()
+    assert "[redacted]" in p and "REDACT_MARK" in p    # client detects the server marker
+    assert "innerHTML" not in p
 
 
 def test_spa_js_is_valid_syntax():

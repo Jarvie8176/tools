@@ -9,6 +9,8 @@ Title resolution precedence (applied in collect): override -> custom-title -> ''
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 
 from . import paths
 
@@ -22,6 +24,33 @@ def load(path: str | None = None) -> dict:
     except (OSError, ValueError):
         return {}
     return data if isinstance(data, dict) else {}
+
+
+def save(key: str, title: str, path: str | None = None) -> dict:
+    """Set (or clear) one override, atomically; return the new map.
+
+    ``title`` empty/whitespace clears the key (removes the override so resolution falls back to
+    custom-title / cloud-side). Starts from the on-disk map so a concurrent hand-edit of *other*
+    keys survives; a corrupt file degrades to an empty base (same as ``load``) rather than crashing.
+    Written to a temp file + ``os.replace`` so a reader never sees a half-written map.
+    """
+    path = path or paths.TITLES_FILE
+    data = load(path)
+    title = (title or "").strip()
+    if title:
+        data[key] = title
+    else:
+        data.pop(key, None)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".cc-monitor-titles.")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(data, fh, indent=2, sort_keys=True)
+        os.replace(tmp, path)  # atomic — a concurrent reader never sees a partial file
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return data
 
 
 def resolve(overrides: dict, session_id: str, bridge_id: str | None) -> str:

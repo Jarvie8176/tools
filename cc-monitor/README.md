@@ -66,7 +66,17 @@ The `serve` mode exposes, alongside the HTML dashboard:
 | `GET /api/sessions` | current session rows as JSON (the same projection the SSE stream pushes) |
 | `GET /api/stream` | Server-Sent Events — one `data:` frame per real change, heartbeats between |
 | `GET /api/config` · `POST /api/config` | read / update the runtime config (schema-gated, persisted) |
+| `POST /api/titles` | set/clear a local title override — `{key: sessionId\|bridgeSessionId, title}` (empty title clears); atomic write |
 | `GET /metrics` | Prometheus exposition — **aggregate** session gauges (see below) |
+
+The dashboard at `/` is a zero-horizontal-scroll SPA: any viewport shows 5 importance-ordered
+fields (status → name → latest prompt → context → idle); origin, bridge, model, cum tokens and the
+opening prompt drill down into an expand panel. Three density presets (patrol / standard / debug),
+a settings drawer (reveal · theme · prompt line-clamp · ctx thresholds · columns), and in-place
+rename (writing back via `POST /api/titles`). Prompt summaries truncate by visual line count (CSS
+line-clamp), so CJK reads as a first-class script. Display prefs persist in `localStorage`; reveal
+is a server behaviour switch (`redact_default`), single-user with no per-device auth. `/legacy`
+still serves the no-JS `<meta refresh>` fallback for curl.
 
 **Metrics** are aggregate, never per-session (a `session=<uuid>` label would be high-cardinality
 and would leak session identity into the TSDB): `cc_monitor_sessions{status=...}`,
