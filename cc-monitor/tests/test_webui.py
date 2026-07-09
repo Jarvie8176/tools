@@ -38,7 +38,7 @@ def test_spa_has_core_fields_and_controls():
     # present (status -> name -> latest prompt -> context -> idle); the rest drill into an expand
     # panel. Assert the built artifact carries the core labels, density presets, and API surface.
     p = _page()
-    for label in ("status", "名称", "最新 prompt", "context", "idle"):
+    for label in ("status", "名字", "最新 prompt", "context", "idle"):
         assert label in p, f"missing core field {label!r}"
     for density in ("巡检", "标准", "排查"):               # three density presets (US4)
         assert density in p, f"missing density preset {density!r}"

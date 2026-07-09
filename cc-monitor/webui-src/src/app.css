@@ -1,39 +1,106 @@
 @import "tailwindcss";
 
-/* Design tokens (docs/plans/cc-monitor-pwa-ui-design.md §1.2). Dark default; .light swaps them.
-   Theming stays a runtime CSS-var swap so components never branch on theme. */
+/* ── 主题变量（设计规范 §1.2）── */
 :root {
-  --bg:#05070a; --panel:#0d1218; --row:#11171f; --card:#171d25; --well:rgba(0,0,0,.32);
-  --t1:#f2f5f8; --t2:#c9d2da; --t3:#8b949e; --t4:#5f6a75;
-  --bd:rgba(255,255,255,.14); --bd2:rgba(255,255,255,.09);
-  --ok:#3fb950; --info:#4f9cf0; --warn:#d29922; --dgr:#f0564f;
-  --okbg:rgba(63,185,80,.14); --infobg:rgba(79,156,240,.14); --warnbg:rgba(210,153,34,.15); --dgrbg:rgba(240,86,79,.14);
-  --sh:0 1px 3px rgba(0,0,0,.5);
-  --f-sans:'Noto Sans SC',system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-  --f-mono:'JetBrains Mono',ui-monospace,Menlo,Consolas,monospace;
-  --pl:2;
-  color-scheme:dark;
+  --bg: #05070a;
+  --panel: #0d1218;
+  --row: #11171f;
+  --card: #171d25;
+  --well: rgba(0, 0, 0, .32);
+  --t1: #f2f5f8;
+  --t2: #b6c1cb;
+  --t3: #8b96a1;
+  --t4: #5f6a75;
+  --bd: rgba(255, 255, 255, .14);
+  --bd2: rgba(255, 255, 255, .09);
+  --ok: #3fb950;
+  --info: #4f9cf0;
+  --warn: #d29922;
+  --dgr: #f0564f;
+  --chip: rgba(255, 255, 255, .06);
+  --chip2: rgba(255, 255, 255, .14);
+  --track: rgba(255, 255, 255, .12);
+  --okbg: rgba(63, 185, 80, .12);
+  --infobg: rgba(79, 156, 240, .09);
+  --warnbg: rgba(210, 153, 34, .08);
+  --dgrbg: rgba(240, 86, 79, .15);
+  --sh: 0 2px 8px rgba(0, 0, 0, .55), inset 0 1px 0 rgba(255, 255, 255, .05);
 }
-:global(body.light) {
-  --bg:#eef0f2; --panel:#fff; --row:#fff; --card:#fff; --well:#f4f6f8;
-  --t1:#1c2126; --t2:#38414b; --t3:#6b7480; --t4:#98a1ab;
-  --bd:rgba(0,0,0,.13); --bd2:rgba(0,0,0,.08);
-  --ok:#1f8a5b; --info:#2a6fdb; --warn:#b07508; --dgr:#cf3f38;
-  --okbg:rgba(31,138,91,.12); --infobg:rgba(42,111,219,.1); --warnbg:rgba(176,117,8,.12); --dgrbg:rgba(207,63,56,.1);
-  --sh:0 1px 2px rgba(0,0,0,.12);
-  color-scheme:light;
-}
-html,body { margin:0; padding:0; }
-body { background:var(--bg); color:var(--t2); font-family:var(--f-sans); font-size:14px; }
-.mono { font-family:var(--f-mono); }
 
-/* dot glyphs (status), line-clamp, dual-range thumbs — a few things Tailwind utilities can't express */
-.dot{display:inline-block;width:8px;height:8px;border-radius:50%;vertical-align:middle;flex:0 0 auto}
-.dot.busy{background:var(--ok);animation:pulse 1.4s ease-in-out infinite}
-.dot.active{border:1.5px solid var(--info);background:transparent}
-.dot.orphaned{width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:9px solid var(--warn);border-radius:0}
-@keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
-.clamp{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:var(--pl);overflow:hidden;line-height:1.6;word-break:break-word}
-.dual input[type=range]{position:absolute;top:2px;left:0;width:100%;margin:0;height:22px;background:none;pointer-events:none;-webkit-appearance:none;appearance:none}
-.dual input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;pointer-events:auto;width:16px;height:16px;border-radius:50%;background:var(--panel);border:2px solid var(--info);cursor:pointer}
-.dual input[type=range]::-moz-range-thumb{pointer-events:auto;width:16px;height:16px;border-radius:50%;background:var(--panel);border:2px solid var(--info);cursor:pointer}
+[data-theme="light"] {
+  --bg: #eef0f2;
+  --panel: #ffffff;
+  --row: #ffffff;
+  --card: #ffffff;
+  --well: #f4f6f8;
+  --t1: #1c2126;
+  --t2: #4a545e;
+  --t3: #6b7580;
+  --t4: #98a1ab;
+  --bd: rgba(0, 0, 0, .13);
+  --bd2: rgba(0, 0, 0, .08);
+  --ok: #1f8a5b;
+  --info: #2a6fdb;
+  --warn: #b07508;
+  --dgr: #cf3f38;
+  --chip: rgba(0, 0, 0, .05);
+  --chip2: rgba(0, 0, 0, .09);
+  --track: rgba(0, 0, 0, .08);
+  --okbg: rgba(31, 138, 91, .09);
+  --infobg: rgba(42, 111, 219, .08);
+  --warnbg: rgba(176, 117, 8, .1);
+  --dgrbg: rgba(207, 63, 56, .08);
+  --sh: 0 1px 3px rgba(0, 0, 0, .09);
+}
+
+/* Tailwind v4 utility tokens → 运行时变量（主题切换组件零感知） */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-panel: var(--panel);
+  --color-row: var(--row);
+  --color-card: var(--card);
+  --color-well: var(--well);
+  --color-t1: var(--t1);
+  --color-t2: var(--t2);
+  --color-t3: var(--t3);
+  --color-t4: var(--t4);
+  --color-bd: var(--bd);
+  --color-bd2: var(--bd2);
+  --color-ok: var(--ok);
+  --color-info: var(--info);
+  --color-warn: var(--warn);
+  --color-dgr: var(--dgr);
+  --color-chip: var(--chip);
+  --color-chip2: var(--chip2);
+  --color-track: var(--track);
+  --color-okbg: var(--okbg);
+  --color-infobg: var(--infobg);
+  --color-warnbg: var(--warnbg);
+  --color-dgrbg: var(--dgrbg);
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-sans: "Noto Sans SC", system-ui, -apple-system, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  font-family: var(--font-sans);
+}
+
+a { color: var(--info); }
+a:hover { filter: brightness(1.15); }
+
+@keyframes ccpulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .35; }
+}
+.ccpulse { animation: ccpulse 2s infinite; }
+.ccpulse-fast { animation: ccpulse 1.4s infinite; }
+
+/* 视觉行数截断（US3）：行数由 style 里的 --lines 控制 */
+.clamp {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--lines, 2);
+  overflow: hidden;
+}
