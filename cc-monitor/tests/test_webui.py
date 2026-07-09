@@ -57,6 +57,16 @@ def test_spa_truncates_free_text_columns():
     assert "function clip(" in p
     assert "clip(r.initial_prompt" in p and "clip(r.last_prompt" in p
     assert "prompt_trunc_html" in p and "title_trunc_html" in p
+    # CSS hard bound too: char-clipping alone still lets 70 CJK chars stretch the column, and the
+    # free-text cells carry the clamp class so the max-width actually applies.
+    assert "td.clamp{max-width" in p and 'dim clamp"' in p
+    assert "td.wrap{max-width" in p
+
+
+def test_spa_ctx_bar_fill_is_block():
+    # .bar is a <span>; without display:block an inline element ignores width/height, so the
+    # coloured fill rendered at zero size and every context bar looked like an empty grey pill.
+    assert ".bar{display:block" in _page()
 
 
 def test_spa_js_is_valid_syntax():

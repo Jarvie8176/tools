@@ -37,9 +37,11 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d;font-size:13px;white-space:nowrap}
  th{color:#8b949e;font-weight:600;cursor:pointer;user-select:none}
  td.wrap,th.wrap{white-space:normal}
+ td.wrap{max-width:28ch;overflow-wrap:anywhere}
+ td.clamp{max-width:44ch;overflow:hidden;text-overflow:ellipsis}
  .mono{font-family:ui-monospace,monospace}
  .barwrap{display:inline-block;width:110px;height:8px;background:#21262d;border-radius:4px;vertical-align:middle}
- .bar{height:8px;border-radius:4px}
+ .bar{display:block;height:8px;border-radius:4px}
  tr.busy td:first-child{border-left:2px solid #3fb950}
  tr.grouptop td{border-top:2px solid #30363d}
  .dim{opacity:.4}
@@ -120,7 +122,7 @@ function mkRow(){
   const tr = document.createElement("tr");
   tr._c = {
     status: cell(tr), u8: cell(tr, "mono"), name: cell(tr, "mono small"), origin: cell(tr, "small"),
-    title: cell(tr, "wrap"), initp: cell(tr, "mono small dim"), lastp: cell(tr, "mono small dim"),
+    title: cell(tr, "wrap"), initp: cell(tr, "mono small dim clamp"), lastp: cell(tr, "mono small dim clamp"),
     model: cell(tr, "mono"), seff: cell(tr), ctx: cell(tr), cum: cell(tr, "mono"),
     idle: cell(tr), bridge: cell(tr, "mono small"),
   };
