@@ -116,8 +116,9 @@ def test_spa_surfaces_origin_and_reconciliation():
     # Redesign (#1944): origin is no longer a sortable wide-table column — it rides as a per-row
     # badge (mgd/env/cli, ·b for bridged) in the name cell + expand detail, and the reconciliation
     # strip (with drift highlighting) is retained. Assert the origin + recon invariants survive.
+    # (Svelte build: identifiers are minified, so assert on the user-visible strings that must
+    # survive minification — the origin taxonomy + abbreviations + the recon strip labels.)
     p = webui.spa_page().decode()
-    assert "ORIGIN_ABBR" in p and "originBadge" in p             # per-row origin badge
     assert "cc-session-managed" in p and "rc-env-spawned" in p and "individual-cli" in p
-    assert "paintRecon" in p and "id=recon" in p                 # reconciliation strip
-    assert "drift" in p and "url-ledger" in p                    # drift highlight retained
+    assert "mgd" in p and "env" in p and "cli" in p              # per-row origin abbreviations
+    assert "来源核对" in p and "url-ledger" in p                  # reconciliation strip + drift lens

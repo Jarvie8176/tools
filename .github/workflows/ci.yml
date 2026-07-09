@@ -179,6 +179,22 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
           cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: cc-monitor/webui-src/package-lock.json
+      - name: Web UI — type-check + build + verify committed artifact is fresh
+        working-directory: cc-monitor/webui-src
+        # The dashboard is a Svelte/Vite app built to a single committed webui_page.html (served by
+        # the stdlib server, no build at deploy time). Rebuild here and fail if the committed
+        # artifact drifts from source — a stale build would pass the Python tests silently.
+        run: |
+          npm ci
+          npm run check
+          npm run build
+          git diff --exit-code ../cc_monitor/webui_page.html \
+            || { echo "::error::cc_monitor/webui_page.html is stale — run 'npm run build' in webui-src and commit the result"; exit 1; }
       - name: Install
         run: pip install -e ".[dev]" pytest-cov
       - name: Test with coverage
