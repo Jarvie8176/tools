@@ -119,6 +119,14 @@ def test_api_titles_post_rejects_bad_json(base_url, tmp_path, monkeypatch):
     assert status == 400
 
 
+def test_spa_and_api_are_not_cached(base_url):
+    # US2: the SPA shell + JSON API must revalidate each load so a redeploy / config change is seen
+    # immediately, never served from a stale browser/proxy cache (#108).
+    for path in ("/", "/api/config"):
+        with urllib.request.urlopen(base_url + path) as r:
+            assert r.headers.get("Cache-Control") == "no-cache", path
+
+
 def test_server_widens_accept_backlog():
     # stdlib default request_queue_size=5 gives a ~1s TCP-RTO tail under bursts; we widen it
     assert server._Server.request_queue_size == 128
