@@ -154,6 +154,10 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            # Revalidate the SPA shell every load so a redeploy is picked up immediately — a cached
+            # shell served an old build after an update (US2 "stale shell", #108). The data is on
+            # /api/stream anyway, so the shell is tiny to re-fetch.
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(body)
 
@@ -164,6 +168,7 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")  # /api/{sessions,config} + writes: always fresh
             self.end_headers()
             self.wfile.write(body)
 
