@@ -31,7 +31,6 @@
               <span class="truncate text-[13.5px] font-medium text-t1 {r.mono ? 'font-mono' : ''}">{r.dispName}</span>
               {#if !r.orphan}<span class="shrink-0 text-[11px] text-info">✎</span>{/if}
             </div>
-            <ModelTag model={r.model} effort={r.effort} />
             <span class="shrink-0 rounded-[5px] px-2 py-0.5 font-mono text-[10px] font-semibold {p.cls}">{p.text}</span>
           </div>
 
@@ -44,6 +43,7 @@
               <div class="h-[5px] flex-1 rounded-[3px] bg-track"><div class="h-[5px] rounded-[3px] {CTX_BG[r.level]}" style="width:{r.pct}%"></div></div>
               <span class="font-mono text-[10.5px] font-medium {CTX_TEXT[r.level]} {r.level === 'dgr' ? 'font-bold' : ''}">{r.pct}%</span>
             {/if}
+            {#if eff.cols.model}<ModelTag model={r.model} effort={r.effort} />{/if}
             {#if eff.cols.idle}<span class="font-mono text-[10.5px] text-t4">空闲 {r.idleStr}</span>{/if}
           </div>
         </div>

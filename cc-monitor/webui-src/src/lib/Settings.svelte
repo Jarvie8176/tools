@@ -104,7 +104,7 @@
     <div class="flex flex-wrap gap-1.5">
       <span class="rounded-full border border-bd2 bg-chip px-[11px] py-1 font-mono text-[11px] font-medium text-t4">status 🔒</span>
       <span class="rounded-full border border-bd2 bg-chip px-[11px] py-1 font-mono text-[11px] font-medium text-t4">名字 🔒</span>
-      {#each [['prompt', 'prompt'], ['ctx', 'context'], ['idle', 'idle']] as [key, label] (key)}
+      {#each [['prompt', 'prompt'], ['ctx', 'context'], ['model', '模型'], ['idle', 'idle']] as [key, label] (key)}
         <button
           class="cursor-pointer rounded-full border px-[11px] py-1 font-mono text-[11px] font-medium
                  {eff.cols[key] ? 'border-info bg-infobg text-info' : 'border-bd2 text-t3'}"

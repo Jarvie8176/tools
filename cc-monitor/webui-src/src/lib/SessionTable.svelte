@@ -3,7 +3,6 @@
   import StatusDot from './StatusDot.svelte';
   import CtxBar from './CtxBar.svelte';
   import Detail from './Detail.svelte';
-  import ModelTag from './ModelTag.svelte';
 
   let { rows } = $props();
 
@@ -12,6 +11,7 @@
     const parts = ['96px', c.prompt ? '220px' : '1fr'];
     if (c.prompt) parts.push('1fr');
     if (c.ctx) parts.push(c.prompt ? '190px' : '240px');
+    if (c.model) parts.push('128px');   // model + think level — right of context
     if (c.idle) parts.push('70px');
     parts.push('34px');
     return parts.join(' ');
@@ -24,6 +24,7 @@
     <div>SESSION</div>
     {#if eff.cols.prompt}<div>在干什么（最新 turn）</div>{/if}
     {#if eff.cols.ctx}<div>CONTEXT</div>{/if}
+    {#if eff.cols.model}<div>MODEL</div>{/if}
     {#if eff.cols.idle}<div class="text-right">IDLE</div>{/if}
     <div></div>
   </div>
@@ -53,10 +54,7 @@
               >✎</button>
             {/if}
           </div>
-          <div class="mt-0.5 flex min-w-0 items-center gap-1.5">
-            <span class="truncate font-mono text-[10.5px] text-t4">{r.sub}</span>
-            <ModelTag model={r.model} effort={r.effort} />
-          </div>
+          <div class="mt-0.5 font-mono text-[10.5px] text-t4">{r.sub}</div>
         </div>
 
         {#if eff.cols.prompt}
@@ -67,6 +65,12 @@
         {/if}
 
         {#if eff.cols.ctx}<CtxBar {r} />{/if}
+        {#if eff.cols.model}
+          <div class="min-w-0 font-mono text-[11px] leading-tight">
+            <div class="truncate text-t2">{r.model}</div>
+            {#if r.effort}<div class="truncate text-[10px] text-t4">推理 {r.effort}</div>{/if}
+          </div>
+        {/if}
         {#if eff.cols.idle}<div class="text-right font-mono text-[12px] font-medium text-t2">{r.idleStr}</div>{/if}
 
         <div class="text-center font-mono text-[11px] {r.expanded ? 'text-info' : 'text-t4'}">{r.expanded ? '▾' : '▸'}</div>

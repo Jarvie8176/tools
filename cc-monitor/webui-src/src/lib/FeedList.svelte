@@ -1,5 +1,5 @@
 <script>
-  import { toggleExpand, startRename } from './state.svelte.js';
+  import { eff, toggleExpand, startRename } from './state.svelte.js';
   import { CTX_TEXT } from './fmt.js';
   import StatusDot from './StatusDot.svelte';
   import ModelTag from './ModelTag.svelte';
@@ -24,7 +24,7 @@
             onclick={(e) => { e.stopPropagation(); startRename(r.id, r.rawName); }}
           >✎</button>
         {/if}
-        <ModelTag model={r.model} effort={r.effort} />
+        {#if eff.cols.model}<ModelTag model={r.model} effort={r.effort} />{/if}
         <div class="flex-1"></div>
         <span class="shrink-0 font-mono text-[11px] font-medium {CTX_TEXT[r.level]} {r.level === 'dgr' ? 'font-bold' : ''}">{r.pct}%</span>
         <span class="shrink-0 font-mono text-[11px] font-medium text-t2">{r.idleStr}</span>
