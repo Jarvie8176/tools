@@ -5,7 +5,7 @@
 set -euo pipefail
 
 PROG="${0##*/}"
-VERSION="0.7.2"
+VERSION="0.7.3"
 
 # Absolute, symlink-resolved path to this script. Captured at top-level
 # so --update can locate the enclosing git checkout.
@@ -39,7 +39,7 @@ DESCRIPTION
     keeps retrying (it never self-exits on failure — a clean exit on
     failure once stranded the backbone after a cold-boot transient,
     homelab-ops#1222). The watchdog's health signal is real RC
-    connectivity (the pane's "Connected" state), not the local-only
+    connectivity (the pane's "Connected"/"Ready" state), not the local-only
     \`claude auth status\` (which can read OK while RC is 401'ing).
     The server prints its claude.ai/code URL
     on startup; $PROG captures it from the pane and surfaces it via
@@ -326,7 +326,7 @@ ENVIRONMENT
     CC_SESSION_SV_WATCHDOG_INTERVAL Health watchdog probe interval in
                                     seconds. The supervisor periodically
                                     probes real RC connectivity (pane
-                                    "Connected") and scrapes capacity.
+                                    "Connected"/"Ready") and scrapes capacity.
                                     Default: 60.
     CC_SESSION_PROMPT_IDLE_TIMEOUT  Max seconds to wait for the TUI to
                                     reach a stable idle prompt before
@@ -836,7 +836,7 @@ print_metrics_one() {
   printf '# HELP cc_session_auth_healthy Whether the last claude-auth-status probe succeeded (LOCAL cred state only; not RC connectivity).\n'
   printf '# TYPE cc_session_auth_healthy gauge\n'
   printf 'cc_session_auth_healthy{%s} %s\n' "$labels" "$auth_healthy"
-  printf '# HELP cc_session_rc_connected Whether the RC server pane shows a live Connected state (the real teleport-readiness signal).\n'
+  printf '# HELP cc_session_rc_connected Whether the RC server pane shows a live Connected/Ready state (the real teleport-readiness signal).\n'
   printf '# TYPE cc_session_rc_connected gauge\n'
   printf 'cc_session_rc_connected{%s} %s\n' "$labels" "$rc_connected"
   printf '# HELP cc_session_circuit_open 1 while the supervisor is in long-backoff after repeated failures (degraded but still retrying).\n'
@@ -1839,14 +1839,19 @@ if [[ "$CC_MODE" == server ]]; then
         "$pr" "$ple" "$pco" "$watchdog_interval" "$pc" | _atomic "$health_file"
     }
 
-    # Real RC-connectivity probe (#3): the server prints "Connected" in this
-    # pane on success. Require the live child alive AND a recent (last few
-    # lines) Connected — guards against a stale scrollback line after exit.
+    # Real RC-connectivity probe (#3): the server prints a live status line
+    # in this pane on success — "Connected" on older claude (e.g. 2.1.185),
+    # renamed to "·✔︎· Ready" somewhere by 2.1.205. Require the live child
+    # alive AND a recent (last few lines) match — guards against a stale
+    # scrollback line after exit. (The supervisor log line "RC not connected"
+    # is lowercase and cannot false-positive the case-sensitive grep. NOTE:
+    # this whole supervisor block is spliced as a single-quoted string —
+    # apostrophes here are fatal at construction time.)
     rc_probe() {
       local pid
       pid="$(_get "$pstate_file" child none)"
       { [[ "$pid" == none || -z "$pid" ]] || ! kill -0 "$pid" 2>/dev/null; } && return 1
-      tmux capture-pane -t "$sv_target" -p -S -8 2>/dev/null | grep -q "Connected"
+      tmux capture-pane -t "$sv_target" -p -S -8 2>/dev/null | grep -qE "Connected|Ready"
     }
 
     scrape_capacity() {

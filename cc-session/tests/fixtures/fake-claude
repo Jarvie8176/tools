@@ -79,8 +79,13 @@ case " $* " in
   *' remote-control '*)
     # Server-mode banner — URL on its own line, matching the real
     # `claude remote-control` startup screen ("Continue coding in the
-    # Claude app or <URL>").
-    printf '\n·OK· Connected · fake · HEAD\n'
+    # Claude app or <URL>"). CC_FAKE_CLAUDE_TUI_READY=1 emits the
+    # 2.1.205-era banner ("·✔︎· Ready") instead of the older "Connected".
+    if [ "${CC_FAKE_CLAUDE_TUI_READY:-}" = 1 ]; then
+      printf '\n·✔︎· Ready · fake · HEAD\n'
+    else
+      printf '\n·OK· Connected · fake · HEAD\n'
+    fi
     printf '    Capacity: 1/32 · New sessions will be created in the current directory\n'
     printf '\nContinue coding in the Claude app or https://claude.ai/code?environment=env_FAKE%05d\n' "$$"
     # Block so the tmux pane doesn't exit and break tests that

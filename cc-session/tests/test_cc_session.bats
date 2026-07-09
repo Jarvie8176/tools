@@ -1758,6 +1758,24 @@ mk_repo() {
   assert_contains "$pc" "respawn_total="
 }
 
+@test "C7: rc_probe accepts the 2.1.205+ 'Ready' banner (rc_connected=1)" {
+  # claude 2.1.205 renamed the RC status banner from "Connected" to
+  # "·✔︎· Ready"; the probe grepped only "Connected" and reported a healthy
+  # backbone as rc: disconnected forever. SERVE_FOREVER keeps the stub child
+  # alive so the probe's kill -0 gate passes.
+  CC_FAKE_CLAUDE_TUI_READY=1 \
+    CC_FAKE_CLAUDE_SERVE_FOREVER=1 \
+    CC_SESSION_SV_WATCHDOG_INTERVAL=1 \
+    run "$CC_SESSION" -d "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  prom_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.prom"
+  for _ in $(seq 1 30); do
+    grep -q '^rc_connected=1' "$prom_file" 2>/dev/null && break
+    sleep 0.5
+  done
+  assert_contains "$(cat "$prom_file" 2>/dev/null)" "rc_connected=1"
+}
+
 # --- C6: metrics output -----------------------------------------------
 
 @test "C6: --metrics outputs prometheus textformat for a live session" {
