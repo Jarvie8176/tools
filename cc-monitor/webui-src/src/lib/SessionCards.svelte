@@ -1,6 +1,7 @@
 <script>
   import { eff, toggleExpand } from './state.svelte.js';
   import { CTX_TEXT, CTX_BG } from './fmt.js';
+  import ModelTag from './ModelTag.svelte';
   let { rows } = $props();
 
   const barColor = (r) => (r.orphan ? 'bg-warn' : r.level === 'dgr' ? 'bg-dgr' : r.busy ? 'bg-ok' : 'bg-info');
@@ -42,6 +43,7 @@
               <div class="h-[5px] flex-1 rounded-[3px] bg-track"><div class="h-[5px] rounded-[3px] {CTX_BG[r.level]}" style="width:{r.pct}%"></div></div>
               <span class="font-mono text-[10.5px] font-medium {CTX_TEXT[r.level]} {r.level === 'dgr' ? 'font-bold' : ''}">{r.pct}%</span>
             {/if}
+            {#if eff.cols.model}<ModelTag model={r.model} effort={r.effort} />{/if}
             {#if eff.cols.idle}<span class="font-mono text-[10.5px] text-t4">空闲 {r.idleStr}</span>{/if}
           </div>
         </div>

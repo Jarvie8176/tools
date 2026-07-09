@@ -45,8 +45,8 @@ export const eff = {
   get cols() {
     if (prefs.colsOverride) return prefs.colsOverride;
     return prefs.density === 'patrol'
-      ? { prompt: false, ctx: true, idle: true }
-      : { prompt: true, ctx: true, idle: true };
+      ? { prompt: false, ctx: true, model: true, idle: true }
+      : { prompt: true, ctx: true, model: true, idle: true };
   }
 };
 
