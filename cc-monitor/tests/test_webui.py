@@ -58,9 +58,14 @@ def test_spa_truncates_free_text_columns():
     assert "clip(r.initial_prompt" in p and "clip(r.last_prompt" in p
     assert "prompt_trunc_html" in p and "title_trunc_html" in p
     # CSS hard bound too: char-clipping alone still lets 70 CJK chars stretch the column, and the
-    # free-text cells carry the clamp class so the max-width actually applies.
+    # free-text cells carry the clamp class so the max-width actually applies. Bounded BOTH ways:
+    # max-width caps the column, min-width stops the table algorithm crushing a wrappable column
+    # to ~1ch when the viewport is narrow (zoom); text wraps within the band like /legacy.
     assert "td.clamp{max-width" in p and 'dim clamp"' in p
     assert "td.wrap{max-width" in p
+    assert p.count("min-width") >= 2
+    # ctx label sits on its own line under the bar — narrower column, matches /legacy
+    assert ".ctxlbl{display:block}" in p
 
 
 def test_spa_ctx_bar_fill_is_block():

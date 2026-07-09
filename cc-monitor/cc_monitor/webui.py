@@ -37,8 +37,9 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  th,td{text-align:left;padding:6px 10px;border-bottom:1px solid #21262d;font-size:13px;white-space:nowrap}
  th{color:#8b949e;font-weight:600;cursor:pointer;user-select:none}
  td.wrap,th.wrap{white-space:normal}
- td.wrap{max-width:28ch;overflow-wrap:anywhere}
- td.clamp{max-width:44ch;overflow:hidden;text-overflow:ellipsis}
+ td.wrap{max-width:28ch;min-width:9ch;overflow-wrap:anywhere}
+ td.clamp{max-width:44ch;min-width:16ch;white-space:normal;overflow-wrap:anywhere}
+ .ctxlbl{display:block}
  .mono{font-family:ui-monospace,monospace}
  .barwrap{display:inline-block;width:110px;height:8px;background:#21262d;border-radius:4px;vertical-align:middle}
  .bar{display:block;height:8px;border-radius:4px}
@@ -138,7 +139,7 @@ function paintCtx(td, r){
   const bar = document.createElement("span"); bar.className = "bar";
   bar.style.width = Math.min(pct, 100).toFixed(0)+"%"; bar.style.background = color;
   wrap.appendChild(bar);
-  const lbl = document.createElement("span"); lbl.className = "small";
+  const lbl = document.createElement("span"); lbl.className = "small ctxlbl";  // own line under the bar (narrower column, like /legacy)
   lbl.textContent = " " + fmtK(r.ctx) + "/" + fmtK(win) + (r.win_certain ? "" : "?") + " (" + pct.toFixed(0) + "%)";
   td.appendChild(wrap); td.appendChild(lbl);
 }
