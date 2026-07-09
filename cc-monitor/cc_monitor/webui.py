@@ -92,7 +92,7 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
 <script>
 "use strict";
 // --- formatting (mirrors render.py: fmt_k / short_model / _idle / title_of / glyph / origin) -----
-const WARN = {warn: 70, crit: 85};                 // ctx colour thresholds; refreshed from /api/config
+const WARN = {warn: 50, crit: 80};                 // ctx colour thresholds (SCHEMA defaults); refreshed from /api/config
 const ORIGIN_ABBR = {"cc-session-managed": "mgd", "rc-env-spawned": "env", "individual-cli": "cli"};
 const ORIGIN_ORDER = ["cc-session-managed", "rc-env-spawned", "individual-cli"];
 function fmtK(n){ n = n||0;
@@ -280,12 +280,15 @@ function saveSettings(){
   const out = {};
   for (const inp of $("settings").querySelectorAll("input[data-key]")){
     if (inp.disabled) continue;                       // never send env-locked knobs
-    out[inp.dataset.key] = inp.type === "checkbox" ? inp.checked : Number(inp.value);
+    if (inp.type === "checkbox"){ out[inp.dataset.key] = inp.checked; continue; }
+    const v = Number(inp.value);                       // skip blank/NaN so a cleared field is a
+    if (inp.value === "" || Number.isNaN(v)) continue; // no-op, not a silent reset to the min
+    out[inp.dataset.key] = v;
   }
   const st = $("cfgstatus"); st.textContent = "saving…"; st.style.color = "#8b949e";
   fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(out)})
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
-    .then(c => { applyConfig(c); buildSettings();      // rebuild to reflect coerced/clamped values
+    .then(c => { applyConfig(c); reconcile(); buildSettings();  // repaint rows (new colour thresholds)
                  const s = $("cfgstatus"); s.textContent = "saved ✓"; s.style.color = "#3fb950"; })
     .catch(e => { const s = $("cfgstatus"); s.textContent = "error: " + e; s.style.color = "#e5534b"; });
 }

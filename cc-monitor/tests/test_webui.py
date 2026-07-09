@@ -43,6 +43,10 @@ def test_spa_has_settings_panel():
     assert 'buildSettings' in p and 'saveSettings' in p
     # the save path must POST — never a GET that mutates
     assert 'method:"POST"' in p or "method: 'POST'" in p
+    # audit fixes: a cleared number field is a no-op (not a silent reset to min), and a save
+    # repaints existing rows with the new colour thresholds instead of waiting for the next tick.
+    assert 'Number.isNaN' in p
+    assert 'reconcile(); buildSettings()' in p
 
 
 def test_spa_js_is_valid_syntax():
