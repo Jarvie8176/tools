@@ -90,3 +90,27 @@ def test_save_drops_removed_or_unknown_keys(tmp_path):
     on_disk = json.loads(p.read_text())
     assert "active_gap" not in on_disk and "bogus" not in on_disk
     assert on_disk["ctx_warn_pct"] == 40 and on_disk["ctx_crit_pct"] == 70
+
+
+def test_schema_meta_shape():
+    meta = config.schema_meta()
+    assert set(meta) == set(config.SCHEMA)                       # exposes every knob, nothing extra
+    for k, m in meta.items():
+        default, lo, hi = config.SCHEMA[k]
+        assert m["default"] == default
+        if isinstance(default, bool):
+            assert m["type"] == "bool" and "min" not in m        # bool has no range
+        else:
+            assert m["type"] == "int" and m["min"] == lo and m["max"] == hi
+
+
+def test_schema_meta_flags_env_locked_knob(monkeypatch):
+    monkeypatch.setenv("CC_MONITOR_BUSY_IDLE_GAP", "30")         # env override pins busy_idle_gap
+    meta = config.schema_meta()
+    assert meta["busy_idle_gap"]["env_locked"] == "CC_MONITOR_BUSY_IDLE_GAP"
+    assert "env_locked" not in meta["ctx_warn_pct"]              # no env var for this knob
+
+
+def test_schema_meta_no_env_lock_when_unset(monkeypatch):
+    monkeypatch.delenv("CC_MONITOR_BUSY_IDLE_GAP", raising=False)
+    assert "env_locked" not in config.schema_meta()["busy_idle_gap"]

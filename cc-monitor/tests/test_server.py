@@ -74,6 +74,16 @@ def test_api_config_get_then_post_persists(base_url, tmp_path, monkeypatch):
     assert json.loads(body)["ctx_warn_pct"] == 42  # GET reflects the persisted change
 
 
+def test_api_config_schema_get(base_url):
+    status, body = _get(base_url + "/api/config/schema")
+    assert status == 200
+    meta = json.loads(body)
+    assert set(meta) == set(config.SCHEMA)                     # every knob exposed
+    assert meta["redact_default"]["type"] == "bool"
+    assert meta["ctx_warn_pct"]["type"] == "int"
+    assert meta["ctx_warn_pct"]["min"] == 0 and meta["ctx_warn_pct"]["max"] == 100
+
+
 def test_api_config_post_rejects_bad_json(base_url, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "CONFIG_FILE", str(tmp_path / "cfg.json"))
     status, _ = _post(base_url + "/api/config", b"{not json")

@@ -36,6 +36,15 @@ def test_spa_has_expected_columns_and_controls():
     assert '/api/config' in p                         # picks up runtime ctx colour thresholds
 
 
+def test_spa_has_settings_panel():
+    p = _page()
+    assert 'id=cfgbtn' in p and 'id=settings' in p     # ⚙ toggle + panel container
+    assert '/api/config/schema' in p                   # renders inputs from the exposed schema
+    assert 'buildSettings' in p and 'saveSettings' in p
+    # the save path must POST — never a GET that mutates
+    assert 'method:"POST"' in p or "method: 'POST'" in p
+
+
 def test_spa_js_is_valid_syntax():
     node = shutil.which("node")
     if not node:  # node ships on CI ubuntu runners + dev host; skip where absent rather than fail

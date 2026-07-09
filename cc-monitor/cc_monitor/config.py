@@ -126,3 +126,23 @@ def save(partial: dict, path: str | None = None) -> dict:
             os.unlink(tmp)
     _cache[0] = None  # invalidate (guards a coarse-mtime FS where save+load share an mtime tick)
     return load(path)
+
+
+def schema_meta() -> dict:
+    """Per-knob shape for the settings UI: ``{key: {type, default[, min, max][, env_locked]}}``.
+
+    Read-only projection of ``SCHEMA`` + ``_ENV`` — exposes bounds/type so the client can render a
+    correct input (checkbox vs number+range) without hardcoding the schema, but never a mechanism to
+    write outside it (save() stays the sole schema-gated writer). ``env_locked`` names the env var
+    for any knob an env override currently pins, so the UI can disable that input — a file/UI write
+    would be silently ignored by load() while the override is set."""
+    meta: dict = {}
+    for k, (default, lo, hi) in SCHEMA.items():
+        entry: dict = {"type": "bool" if isinstance(default, bool) else "int", "default": default}
+        if entry["type"] == "int":
+            entry["min"], entry["max"] = lo, hi
+        env = _ENV.get(k)
+        if env and os.environ.get(env) is not None:
+            entry["env_locked"] = env
+        meta[k] = entry
+    return meta

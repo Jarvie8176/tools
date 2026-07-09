@@ -70,6 +70,8 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                     self._stream(broker) if broker else self._notfound()  # needs serve() broker
                 elif path == "/api/config":
                     self._json(config.load())  # UI/API reads the effective runtime config
+                elif path == "/api/config/schema":
+                    self._json(config.schema_meta())  # knob type/bounds so the UI renders inputs
                 elif path == "/metrics":
                     self._metrics(broker) if broker else self._notfound()  # aggregate exposition
                 elif path == "/favicon.ico":

@@ -44,6 +44,15 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
  tr.grouptop td{border-top:2px solid #30363d}
  .dim{opacity:.4}
  .badge{font-size:10px;border:1px solid #30363d;border-radius:4px;padding:0 4px;color:#8b949e}
+ button{background:#161b22;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:4px 10px;font:inherit;font-size:12px;cursor:pointer}
+ button:hover{border-color:#58a6ff}
+ #settings{margin:6px 0;padding:10px 12px;background:#0f141a;border:1px solid #21262d;border-radius:8px;max-width:520px}
+ #settings[hidden]{display:none}
+ .cfg-row{display:flex;align-items:center;gap:10px;margin:4px 0;font-size:12px}
+ .cfg-key{flex:0 0 150px;color:#8b949e;font-family:ui-monospace,monospace}
+ .cfg-row input[type=number]{width:90px}
+ .cfg-row input:disabled{opacity:.5}
+ .cfg-actions{display:flex;align-items:center;gap:10px;margin-top:8px}
  footer{margin-top:10px}
 </style>
 <h1>cc-monitor <span class=small id=meta></span></h1>
@@ -61,8 +70,10 @@ _PAGE = r"""<!doctype html><html lang=en><meta charset=utf-8>
   </select>
  </label>
  <label class=small><input type=checkbox id=grouporigin> group by origin</label>
+ <button id=cfgbtn title="runtime settings">⚙ settings</button>
  <span class=small id=count></span>
 </div>
+<div id=settings hidden></div>
 <table>
  <thead><tr>
   <th data-sort=default>status</th><th>uuid8</th><th>name</th><th data-sort=origin>origin</th>
@@ -235,10 +246,57 @@ function connect(){
   es.onmessage = (e) => { setConn(true); try { apply(JSON.parse(e.data)); } catch (_){} };
   es.onerror = () => setConn(false);                 // EventSource auto-reconnects; just reflect state
 }
-fetch("/api/config").then(r => r.json()).then(c => {  // pick up runtime ctx colour thresholds
+// --- settings panel ----------------------------------------------------------------------------
+let SCHEMA_META = {}, CONFIG = {};
+function applyConfig(c){                              // pick up runtime ctx colour thresholds live
+  CONFIG = c || {};
   if (typeof c.ctx_warn_pct === "number") WARN.warn = c.ctx_warn_pct;
   if (typeof c.ctx_crit_pct === "number") WARN.crit = c.ctx_crit_pct;
-}).catch(()=>{});
+}
+function buildSettings(){                             // render the form from schema + current values
+  const box = $("settings"); box.textContent = "";
+  for (const k of Object.keys(SCHEMA_META).sort()){
+    const m = SCHEMA_META[k], row = document.createElement("label"); row.className = "cfg-row";
+    const key = document.createElement("span"); key.className = "cfg-key"; key.textContent = k;
+    row.appendChild(key);
+    const inp = document.createElement("input"); inp.dataset.key = k;
+    if (m.type === "bool"){ inp.type = "checkbox"; inp.checked = !!CONFIG[k]; }
+    else { inp.type = "number"; inp.min = m.min; inp.max = m.max; inp.value = CONFIG[k]; }
+    if (m.env_locked){ inp.disabled = true; }         // env override pins it; a write would be ignored
+    row.appendChild(inp);
+    if (m.env_locked){
+      const lk = document.createElement("span"); lk.className = "small dim";
+      lk.textContent = "pinned by " + m.env_locked; row.appendChild(lk);
+    }
+    box.appendChild(row);
+  }
+  const bar = document.createElement("div"); bar.className = "cfg-actions";
+  const save = document.createElement("button"); save.textContent = "save"; save.id = "cfgsave";
+  save.addEventListener("click", saveSettings);
+  const st = document.createElement("span"); st.className = "small"; st.id = "cfgstatus";
+  bar.appendChild(save); bar.appendChild(st); box.appendChild(bar);
+}
+function saveSettings(){
+  const out = {};
+  for (const inp of $("settings").querySelectorAll("input[data-key]")){
+    if (inp.disabled) continue;                       // never send env-locked knobs
+    out[inp.dataset.key] = inp.type === "checkbox" ? inp.checked : Number(inp.value);
+  }
+  const st = $("cfgstatus"); st.textContent = "saving…"; st.style.color = "#8b949e";
+  fetch("/api/config", {method:"POST", headers:{"Content-Type":"application/json"}, body: JSON.stringify(out)})
+    .then(r => r.ok ? r.json() : Promise.reject(r.status))
+    .then(c => { applyConfig(c); buildSettings();      // rebuild to reflect coerced/clamped values
+                 const s = $("cfgstatus"); s.textContent = "saved ✓"; s.style.color = "#3fb950"; })
+    .catch(e => { const s = $("cfgstatus"); s.textContent = "error: " + e; s.style.color = "#e5534b"; });
+}
+function loadConfig(){                                // schema + effective values, then build the form
+  Promise.all([
+    fetch("/api/config").then(r => r.json()),
+    fetch("/api/config/schema").then(r => r.json()),
+  ]).then(([c, s]) => { applyConfig(c); SCHEMA_META = s || {}; buildSettings(); }).catch(()=>{});
+}
+$("cfgbtn").addEventListener("click", () => { const s = $("settings"); s.hidden = !s.hidden; });
+loadConfig();
 ["input","change"].forEach(ev => { $("filter").addEventListener(ev, reconcile); $("sort").addEventListener(ev, reconcile); });
 $("grouporigin").addEventListener("change", reconcile);
 document.querySelectorAll("th[data-sort]").forEach(th =>
