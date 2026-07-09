@@ -54,7 +54,7 @@ export function buildRows() {
       bridge: s.bridge_id ? s.bridge_id + '…' : '—',
       model: orphan ? '—' : shortModel(s.model),
       effort: s.session_effort || null,
-      modelStr: orphan ? '—' : (s.session_effort ? `${shortModel(s.model)} · 推理 ${s.session_effort}` : shortModel(s.model)),
+      modelStr: orphan ? '—' : (s.session_effort ? `${shortModel(s.model)} · ${s.session_effort}` : shortModel(s.model)),
       cum: orphan ? '—' : (s.full ? `↓${fmtK(s.cum_input)} ↑${fmtK(s.cum_output)}` : '(大会话)'),
       winStr: fmtK(win) + (s.win_certain ? ' 实测' : ' ?'),
       origin,

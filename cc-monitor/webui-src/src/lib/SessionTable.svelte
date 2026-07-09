@@ -3,6 +3,7 @@
   import StatusDot from './StatusDot.svelte';
   import CtxBar from './CtxBar.svelte';
   import Detail from './Detail.svelte';
+  import ThinkPill from './ThinkPill.svelte';
 
   let { rows } = $props();
 
@@ -66,9 +67,9 @@
 
         {#if eff.cols.ctx}<CtxBar {r} />{/if}
         {#if eff.cols.model}
-          <div class="min-w-0 font-mono text-[11px] leading-tight">
-            <div class="truncate text-t2">{r.model}</div>
-            {#if r.effort}<div class="truncate text-[10px] text-t4">推理 {r.effort}</div>{/if}
+          <div class="flex min-w-0 items-center gap-1.5">
+            <span class="truncate font-mono text-[11px] text-t2">{r.model}</span>
+            <ThinkPill effort={r.effort} />
           </div>
         {/if}
         {#if eff.cols.idle}<div class="text-right font-mono text-[12px] font-medium text-t2">{r.idleStr}</div>{/if}
