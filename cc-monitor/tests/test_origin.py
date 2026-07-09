@@ -113,8 +113,11 @@ def test_render_text_and_html_show_origin_and_recon(claude):
 
 
 def test_spa_surfaces_origin_and_reconciliation():
+    # Redesign (#1944): origin is no longer a sortable wide-table column — it rides as a per-row
+    # badge (mgd/env/cli, ·b for bridged) in the name cell + expand detail, and the reconciliation
+    # strip (with drift highlighting) is retained. Assert the origin + recon invariants survive.
+    # (Svelte build: identifiers are minified, so assert on strings that must survive minification —
+    # the origin taxonomy the row model maps, plus the reconciliation strip labels + drift lens.)
     p = webui.spa_page().decode()
-    assert "data-sort=origin" in p and "originAbbr" in p          # origin column + sort
-    assert "grouporigin" in p and "group by origin" in p         # REAL origin grouping…
-    assert "group bridged" not in p                              # …replacing the bridged proxy
-    assert "paintRecon" in p and "id=recon" in p                 # reconciliation strip
+    assert "cc-session-managed" in p and "rc-env-spawned" in p and "individual-cli" in p
+    assert "来源核对" in p and ".url 台账" in p                   # reconciliation strip + drift lens

@@ -1,13 +1,16 @@
-"""The SPA shell served at ``/``: SSE-driven (no meta-refresh), XSS-safe by construction, and
-routed so ``/legacy`` still serves the server-rendered fallback."""
+"""The SPA served at ``/``: a Svelte + Vite build (``webui-src/``) committed as a single self-
+contained ``webui_page.html``. SSE-driven (no meta-refresh); ``/legacy`` still serves the no-JS
+fallback. XSS-safe by construction: Svelte escapes every ``{text}`` interpolation and the raw-HTML
+directive is banned repo-wide (asserted below as a source lint)."""
 import re
-import shutil
-import subprocess
 import threading
 import urllib.request
 from http.server import ThreadingHTTPServer
+from pathlib import Path
 
 from cc_monitor import server, webui
+
+_SRC = Path(__file__).resolve().parent.parent / "webui-src" / "src"
 
 
 def _page() -> str:
@@ -21,29 +24,43 @@ def test_spa_is_sse_driven_not_meta_refresh():
     assert "http-equiv=refresh" not in p and "http-equiv=\"refresh\"" not in p  # no full-page reload
 
 
-def test_spa_never_uses_innerhtml():
-    # every dynamic field is written via textContent / createElement — asserting innerHTML is absent
-    # keeps the page XSS-safe by construction (a hostile session name/prompt can't inject markup).
-    assert "innerHTML" not in _page()
+def test_source_never_uses_raw_html_directive():
+    # XSS-safe by construction: Svelte escapes every {text} interpolation; the ONLY way to inject
+    # markup would be the raw-HTML directive, which must never appear in the source. (The compiled
+    # runtime uses innerHTML internally for STATIC templates — never for session data — so we lint
+    # the source for the directive, not the built output for the string.)
+    hits = [f for f in _SRC.rglob("*.svelte") if "{@" + "html" in f.read_text(encoding="utf-8")]
+    assert not hits, f"raw-HTML directive found in: {hits}"
 
 
-def test_spa_has_expected_columns_and_controls():
+def test_spa_has_core_fields_and_controls():
+    # Redesign (#1944): zero-horizontal-scroll — the 5 importance-ordered core fields are always
+    # present (status -> name -> latest prompt -> context -> idle); the rest drill into an expand
+    # panel. Assert the built artifact carries the core labels, density presets, and API surface.
     p = _page()
-    for col in ("status", "uuid8", "name", "title", "initial-prompt", "last-prompt",
-                "model", "s-effort", "context", "cum in/out", "idle", "bridge"):
-        assert col in p, f"missing column {col!r}"
-    assert 'id=filter' in p and 'id=sort' in p        # client-side filter + sort controls
-    assert '/api/config' in p                         # picks up runtime ctx colour thresholds
+    for label in ("status", "名字", "最新 prompt", "context", "idle"):
+        assert label in p, f"missing core field {label!r}"
+    for density in ("巡检", "标准", "排查"):               # three density presets (US4)
+        assert density in p, f"missing density preset {density!r}"
+    assert "来源核对" in p                                 # reconciliation strip (US7/US8)
+    assert "/api/config" in p and "/api/titles" in p    # config read/write + rename writeback (US6)
+    assert "line-clamp" in p                            # CJK visual truncation, not char count (US3)
 
 
-def test_spa_js_is_valid_syntax():
-    node = shutil.which("node")
-    if not node:  # node ships on CI ubuntu runners + dev host; skip where absent rather than fail
-        import pytest
-        pytest.skip("node not available for JS syntax check")
-    js = re.search(r"<script>\n(.*?)\n</script>", _page(), re.S).group(1)
-    r = subprocess.run([node, "--check", "-"], input=js, capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
+def test_spa_renders_redaction_marker_as_masked_block():
+    # A redacted free-text field arrives as the fixed marker; the page detects it and renders a
+    # masked block (▓) rather than the raw marker text.
+    p = _page()
+    assert "[redacted]" in p                            # client detects the server marker
+    assert "▓" in p                                     # masked-block glyph present in the build
+
+
+def test_built_artifact_is_self_contained():
+    # vite-plugin-singlefile inlines JS + CSS, so the stdlib server serves ONE document with no
+    # asset routes. Assert there is no external script/style reference to fetch.
+    p = _page()
+    assert not re.search(r'<script[^>]*\ssrc=', p), "external <script src> — not self-contained"
+    assert not re.search(r'<link[^>]*\shref="[^"]*\.css', p), "external stylesheet — not self-contained"
 
 
 def _serve():

@@ -86,6 +86,39 @@ def test_api_config_post_rejects_non_object(base_url, tmp_path, monkeypatch):
     assert status == 400
 
 
+def test_api_titles_post_writes_override(base_url, tmp_path, monkeypatch):
+    tf = tmp_path / "titles.json"
+    monkeypatch.setattr(paths, "TITLES_FILE", str(tf))
+    status, body = _post(base_url + "/api/titles",
+                         json.dumps({"key": "uuid-1", "title": "Renamed"}).encode())
+    assert status == 200 and json.loads(body) == {"ok": True}
+    from cc_monitor import titles
+    assert titles.load(str(tf)) == {"uuid-1": "Renamed"}
+
+
+def test_api_titles_post_empty_clears(base_url, tmp_path, monkeypatch):
+    tf = tmp_path / "titles.json"
+    monkeypatch.setattr(paths, "TITLES_FILE", str(tf))
+    _post(base_url + "/api/titles", json.dumps({"key": "uuid-1", "title": "X"}).encode())
+    _post(base_url + "/api/titles", json.dumps({"key": "uuid-1", "title": ""}).encode())
+    from cc_monitor import titles
+    assert "uuid-1" not in titles.load(str(tf))
+
+
+def test_api_titles_post_rejects_missing_key(base_url, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "TITLES_FILE", str(tmp_path / "titles.json"))
+    status, _ = _post(base_url + "/api/titles", json.dumps({"title": "no key"}).encode())
+    assert status == 400
+    status, _ = _post(base_url + "/api/titles", json.dumps({"key": "  ", "title": "blank"}).encode())
+    assert status == 400
+
+
+def test_api_titles_post_rejects_bad_json(base_url, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "TITLES_FILE", str(tmp_path / "titles.json"))
+    status, _ = _post(base_url + "/api/titles", b"{not json")
+    assert status == 400
+
+
 def test_server_widens_accept_backlog():
     # stdlib default request_queue_size=5 gives a ~1s TCP-RTO tail under bursts; we widen it
     assert server._Server.request_queue_size == 128

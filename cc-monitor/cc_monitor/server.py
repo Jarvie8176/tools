@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config, webui
+from . import config, titles, webui
 from .collect import collect
 from .otel_sink import OtelSink
 from .render import render_html
@@ -90,6 +90,8 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             try:
                 if path == "/api/config":
                     self._save_config()
+                elif path == "/api/titles":
+                    self._save_title()
                 else:
                     self._notfound()
             except (BrokenPipeError, ConnectionResetError):
@@ -120,6 +122,33 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             # config.save is schema-gated: unknown keys ignored, values coerced+clamped — a POST
             # can only ever set known scalars to in-range values, never write arbitrary content.
             self._json(config.save(data))
+
+        def _save_title(self):
+            # US6 title writeback: {key: sessionId|bridgeSessionId, title: str}. Empty title clears
+            # the override. Only the local override map is touched (never a transcript); a bad body
+            # is a 400, so a malformed client request can't write junk.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > _MAX_BODY:
+                self._json({"error": "bad or missing Content-Length"}, 400)
+                return
+            try:
+                data = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._json({"error": "invalid JSON"}, 400)
+                return
+            key = data.get("key") if isinstance(data, dict) else None
+            if not isinstance(key, str) or not key.strip():
+                self._json({"error": "missing or empty 'key'"}, 400)
+                return
+            title = data.get("title")
+            if title is not None and not isinstance(title, str):
+                self._json({"error": "'title' must be a string"}, 400)
+                return
+            titles.save(key.strip(), title or "")  # empty/None -> clear override
+            self._json({"ok": True})
 
         def _ok(self, body: bytes):
             self.send_response(200)
