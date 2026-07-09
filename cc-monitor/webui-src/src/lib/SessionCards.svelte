@@ -1,6 +1,7 @@
 <script>
   import { eff, toggleExpand } from './state.svelte.js';
   import { CTX_TEXT, CTX_BG } from './fmt.js';
+  import ModelTag from './ModelTag.svelte';
   let { rows } = $props();
 
   const barColor = (r) => (r.orphan ? 'bg-warn' : r.level === 'dgr' ? 'bg-dgr' : r.busy ? 'bg-ok' : 'bg-info');
@@ -30,6 +31,7 @@
               <span class="truncate text-[13.5px] font-medium text-t1 {r.mono ? 'font-mono' : ''}">{r.dispName}</span>
               {#if !r.orphan}<span class="shrink-0 text-[11px] text-info">✎</span>{/if}
             </div>
+            <ModelTag model={r.model} effort={r.effort} />
             <span class="shrink-0 rounded-[5px] px-2 py-0.5 font-mono text-[10px] font-semibold {p.cls}">{p.text}</span>
           </div>
 

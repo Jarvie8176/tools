@@ -3,6 +3,7 @@
   import StatusDot from './StatusDot.svelte';
   import CtxBar from './CtxBar.svelte';
   import Detail from './Detail.svelte';
+  import ModelTag from './ModelTag.svelte';
 
   let { rows } = $props();
 
@@ -52,7 +53,10 @@
               >✎</button>
             {/if}
           </div>
-          <div class="mt-0.5 font-mono text-[10.5px] text-t4">{r.sub}</div>
+          <div class="mt-0.5 flex min-w-0 items-center gap-1.5">
+            <span class="truncate font-mono text-[10.5px] text-t4">{r.sub}</span>
+            <ModelTag model={r.model} effort={r.effort} />
+          </div>
         </div>
 
         {#if eff.cols.prompt}
