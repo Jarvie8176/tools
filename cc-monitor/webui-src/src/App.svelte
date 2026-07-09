@@ -14,6 +14,21 @@
     document.documentElement.dataset.theme = prefs.theme;
   });
 
+  // 字体：按需注入设计 Web 字体 <link>（关 = 系统字体，零外部请求，离线可用）
+  $effect(() => {
+    const ID = 'ccmon-webfont';
+    const existing = document.getElementById(ID);
+    if (prefs.webFonts && !existing) {
+      const l = document.createElement('link');
+      l.id = ID;
+      l.rel = 'stylesheet';
+      l.href = 'https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;700&display=swap';
+      document.head.appendChild(l);
+    } else if (!prefs.webFonts && existing) {
+      existing.remove();
+    }
+  });
+
   // 断点 720px（设计规范 §1.5）
   $effect(() => {
     const mq = window.matchMedia('(max-width: 719px)');

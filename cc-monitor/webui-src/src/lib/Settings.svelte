@@ -4,6 +4,7 @@
     closeSettings, saveSettings, discardSettings, keepEditing, resetSettings, settingsDirty
   } from './state.svelte.js';
   import Stepper from './Stepper.svelte';
+  import DualRange from './DualRange.svelte';
 
   const dirty = $derived(settingsDirty());
   const densityLabel = $derived({ patrol: '巡检', standard: '标准', debug: '排查' }[prefs.density]);
@@ -26,7 +27,7 @@
   onkeydown={(e) => e.key === 'Escape' && closeSettings()}
 >
   <div
-    class="max-h-[88vh] w-full max-w-[440px] overflow-auto rounded-[14px] border border-bd bg-panel px-5 pb-5 pt-[18px]"
+    class="cc-scroll max-h-[88vh] w-full max-w-[440px] overflow-auto rounded-[14px] border border-bd bg-panel px-5 pb-5 pt-[18px]"
     role="dialog" tabindex="-1"
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
@@ -78,6 +79,23 @@
       {/each}
     </div>
 
+    <!-- 字体 -->
+    <div class="mb-2 mt-[18px] font-mono text-[10.5px] font-semibold tracking-[.08em] text-t4">字体</div>
+    <button
+      class="w-full cursor-pointer rounded-[10px] border bg-chip px-3.5 py-3 text-left {prefs.webFonts ? 'border-info' : 'border-bd2'}"
+      onclick={() => (prefs.webFonts = !prefs.webFonts)}
+    >
+      <div class="flex items-center gap-2.5">
+        <div class="flex-1">
+          <div class="text-[12.5px] font-medium text-t1">加载设计 Web 字体</div>
+          <div class="mt-0.5 text-[11px] leading-[1.6] text-t4">Noto Sans SC / JetBrains Mono（首次需联网拉取）· 关 = 系统字体（离线、无外部请求）</div>
+        </div>
+        <div class="flex h-[22px] w-[38px] shrink-0 rounded-[11px] p-0.5 {prefs.webFonts ? 'justify-end bg-info' : 'justify-start bg-chip2'}">
+          <div class="size-[18px] rounded-full bg-panel shadow"></div>
+        </div>
+      </div>
+    </button>
+
     <!-- 列自定义（US4） -->
     <div class="mb-2 mt-[18px] flex items-baseline gap-2">
       <span class="font-mono text-[10.5px] font-semibold tracking-[.08em] text-t4">列自定义</span>
@@ -106,19 +124,14 @@
         </div>
         <Stepper value={String(eff.lines)} dec={() => (prefs.promptLines = Math.max(1, eff.lines - 1))} inc={() => (prefs.promptLines = Math.min(4, eff.lines + 1))} />
       </div>
-      <div class="flex items-center gap-2.5 border-t border-bd2 px-3.5 py-[11px]">
-        <div class="min-w-0 flex-1">
-          <div class="text-[12px] font-medium text-t1">context 关注阈值</div>
-          <div class="mt-0.5 text-[10.5px] leading-normal text-t4">达到后条变琥珀，巡检里列入「需关注」</div>
-        </div>
-        <Stepper value={eff.warn + '%'} valueCls="text-warn" dec={() => (prefs.ctxWarn = Math.max(10, eff.warn - 5))} inc={() => (prefs.ctxWarn = Math.min(eff.danger - 5, eff.warn + 5))} />
-      </div>
-      <div class="flex items-center gap-2.5 border-t border-bd2 px-3.5 py-[11px]">
-        <div class="min-w-0 flex-1">
-          <div class="text-[12px] font-medium text-t1">context 危险阈值</div>
-          <div class="mt-0.5 text-[10.5px] leading-normal text-t4">条变红、百分比加粗</div>
-        </div>
-        <Stepper value={eff.danger + '%'} valueCls="text-dgr" dec={() => (prefs.ctxDanger = Math.max(eff.warn + 5, eff.danger - 5))} inc={() => (prefs.ctxDanger = Math.min(95, eff.danger + 5))} />
+      <div class="border-t border-bd2 px-3.5 pb-[13px] pt-[11px]">
+        <div class="text-[12px] font-medium text-t1">context 阈值</div>
+        <div class="mb-1 mt-0.5 text-[10.5px] leading-normal text-t4">关注 → 条变琥珀（巡检列入「需关注」）· 危险 → 条变红、百分比加粗</div>
+        <DualRange
+          warn={eff.warn} danger={eff.danger}
+          setWarn={(v) => (prefs.ctxWarn = Math.min(Math.max(0, v), eff.danger))}
+          setDanger={(v) => (prefs.ctxDanger = Math.max(Math.min(100, v), eff.warn))}
+        />
       </div>
     </div>
 

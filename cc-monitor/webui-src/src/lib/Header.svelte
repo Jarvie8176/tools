@@ -1,5 +1,5 @@
 <script>
-  import { prefs, ui, setDensity, openSettings } from './state.svelte.js';
+  import { prefs, ui, setDensity, openSettings, setReveal } from './state.svelte.js';
   import { feed } from './data.svelte.js';
   import ReconStrip from './ReconStrip.svelte';
 
@@ -34,12 +34,16 @@
 
     <div class="flex-1"></div>
 
-    {#if prefs.reveal}
-      <div
-        class="flex cursor-help items-center rounded-full border border-info bg-infobg px-2.5 py-[3px] text-[11px] font-medium text-info"
-        title="正在下发 prompt / title 原文 — 投屏/截图前到 ⚙ 设置里关掉"
-      >原文</div>
-    {/if}
+    <!-- 隐私开关（US5 / D3）：直接在 toolbar 切换服务端脱敏 -->
+    <button
+      class="flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-[3px] text-[11px] font-medium
+             {prefs.reveal ? 'border-info bg-infobg text-info' : 'border-bd2 text-t3'}"
+      onclick={() => setReveal(!prefs.reveal)}
+      title={prefs.reveal ? '正在下发 prompt / title 原文 — 点击切回脱敏（投屏/截图安全）' : '当前服务端脱敏下发 — 点击显示原文'}
+    >
+      <span class="font-mono text-[12px] leading-none">{prefs.reveal ? '◉' : '⦿'}</span>
+      <span>{prefs.reveal ? '原文' : '脱敏'}</span>
+    </button>
 
     {#if !ui.isMobile}
       <div class="flex gap-0.5 rounded-lg border border-bd2 bg-chip p-0.5">

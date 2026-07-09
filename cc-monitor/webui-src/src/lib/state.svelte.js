@@ -12,6 +12,7 @@ const DEFAULT_PREFS = {
   promptLines: null,         // 1–4 | null（null = 默认 2）
   ctxWarn: null,             // 10–90 | null（默认 50）
   ctxDanger: null,           // 20–95 | null（默认 75）
+  webFonts: true,            // 加载设计 Web 字体（Noto Sans SC / JetBrains Mono）；关 = 系统字体离线
   titles: {}                 // 兼容占位；写回走 POST /api/titles，SSE 回流刷新（US6）
 };
 
@@ -99,7 +100,7 @@ export function commitRename() {
 export function cancelRename() { ui.renaming = null; }
 
 /* ── 设置：改动即时预览，「保存」才落盘；关闭前未保存提示（reveal 除外——即时服务端）── */
-const SETTING_KEYS = ['theme', 'colsOverride', 'promptLines', 'ctxWarn', 'ctxDanger'];
+const SETTING_KEYS = ['theme', 'colsOverride', 'promptLines', 'ctxWarn', 'ctxDanger', 'webFonts'];
 let snapshot = $state(null);
 const pick = () => JSON.stringify(SETTING_KEYS.map((k) => prefs[k]));
 
@@ -118,7 +119,7 @@ export function discardSettings() {
 export function keepEditing() { ui.confirmClose = false; }
 export function resetSettings() {
   prefs.theme = 'dark'; prefs.colsOverride = null;
-  prefs.promptLines = null; prefs.ctxWarn = null; prefs.ctxDanger = null;
+  prefs.promptLines = null; prefs.ctxWarn = null; prefs.ctxDanger = null; prefs.webFonts = true;
 }
 export function toggleCol(k) {
   const c = { ...eff.cols };

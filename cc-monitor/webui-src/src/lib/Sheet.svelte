@@ -21,7 +21,7 @@
   onkeydown={(e) => e.key === 'Escape' && closeSheet()}
 >
   <div
-    class="max-h-[82vh] w-full max-w-[600px] overflow-auto rounded-t-2xl border border-b-0 border-bd bg-panel px-[18px] pb-[26px] pt-4"
+    class="cc-scroll max-h-[82vh] w-full max-w-[600px] overflow-auto rounded-t-2xl border border-b-0 border-bd bg-panel px-[18px] pb-[26px] pt-4"
     role="dialog" tabindex="-1"
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
