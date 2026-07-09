@@ -74,6 +74,19 @@ def test_api_config_get_then_post_persists(base_url, tmp_path, monkeypatch):
     assert json.loads(body)["ctx_warn_pct"] == 42  # GET reflects the persisted change
 
 
+def _headers(url):
+    with urllib.request.urlopen(url) as r:
+        return {k.lower(): v for k, v in r.headers.items()}
+
+
+def test_spa_and_api_are_not_cached(base_url):
+    # the dashboard shell + live JSON must revalidate each load — otherwise a returning browser
+    # serves a heuristically-cached older page after a deploy and misses new columns / the panel.
+    assert _headers(base_url + "/")["cache-control"] == "no-cache"
+    assert _headers(base_url + "/api/config")["cache-control"] == "no-cache"
+    assert _headers(base_url + "/api/config/schema")["cache-control"] == "no-cache"
+
+
 def test_api_config_schema_get(base_url):
     status, body = _get(base_url + "/api/config/schema")
     assert status == 200

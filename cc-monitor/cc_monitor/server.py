@@ -126,6 +126,10 @@ def _handler(cache: _Cache, broker: Broker | None = None):
         def _ok(self, body: bytes):
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            # The SPA shell is a live dashboard whose markup changes on every deploy (new columns,
+            # the settings panel, …). Without this a returning browser serves a heuristically-cached
+            # older page and silently misses the new UI until a hard refresh. Revalidate each load.
+            self.send_header("Cache-Control", "no-cache")
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
@@ -136,6 +140,7 @@ def _handler(cache: _Cache, broker: Broker | None = None):
         def _json_bytes(self, body: bytes, status: int = 200):
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")  # /api/{sessions,config,config/schema}: always fresh
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
