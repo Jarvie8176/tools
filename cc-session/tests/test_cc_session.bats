@@ -23,6 +23,14 @@ setup() {
   export CLAUDE_BIN="$FAKE_CLAUDE"
   # Isolate this test run's tmux server and TMPDIR-based state so we
   # don't collide with the host's tmux or any prior cc-session run.
+  #
+  # `unset TMUX` is load-bearing, not tidiness. A tmux client with $TMUX set
+  # uses the socket encoded in $TMUX and ignores TMUX_TMPDIR completely. Run
+  # this suite from inside a tmux pane without it and every bare `tmux` below
+  # -- including teardown's kill sweep -- lands on the developer's REAL tmux
+  # server, where the sweep kills their live claude-tp-* / cc-YYYYMMDD-*
+  # sessions. Observed: an RC teleport worker destroyed by a local test run.
+  unset TMUX TMUX_PANE
   export TMUX_TMPDIR="${BATS_TMPDIR}/cc-session-tmux-$$"
   export TMPDIR="${BATS_TMPDIR}"
   mkdir -p "$TMUX_TMPDIR"
@@ -39,8 +47,16 @@ teardown() {
   tmux kill-session -t "$SESSION_NAME" 2>/dev/null || true
   # Lever ① auto-named teleport sessions (claude-tp-<id8>-<hex>) and
   # C3 auto-named default sessions (cc-YYYYMMDD-*) have dynamic names;
-  # sweep them. Safe — the tmux server is isolated to this bats run
-  # via TMUX_TMPDIR.
+  # sweep them.
+  #
+  # This sweep kills by PATTERN, so it is only safe on an isolated tmux
+  # server. Refuse to run it otherwise rather than trusting setup() to have
+  # unset TMUX -- a pattern-kill against the developer's real server would
+  # destroy their live sessions, and it would do so silently.
+  if [[ -n "${TMUX:-}" ]]; then
+    echo "teardown: refusing to sweep -- \$TMUX is set, tmux is NOT isolated" >&2
+    return 1
+  fi
   for _s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null \
                 | grep -E "^claude-tp-|^cc-[0-9]{8}-|$SESSION_NAME" || true); do
     tmux kill-session -t "$_s" 2>/dev/null || true
