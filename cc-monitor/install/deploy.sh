@@ -37,6 +37,7 @@ pipx install --force --python "$py" "$pkg_dir" >/dev/null
 bin="$(command -v cc-monitor || echo "$HOME/.local/bin/cc-monitor")"
 [[ -x "$bin" ]] || { echo "cc-monitor: entry point not found at $bin" >&2; exit 1; }
 
+
 # --- render + install the unit ---
 unit_dir="$HOME/.config/systemd/user"
 mkdir -p "$unit_dir"

@@ -34,7 +34,7 @@ _REDACT_FIELDS = ("custom_title", "override_title", "initial_prompt", "last_prom
 # from the payload so a mere clock advance is not a "change".
 _API_FIELDS = (
     "session_id", "u8", "pid", "name", "model", "status",
-    "ctx", "peak_ctx", "win", "win_certain",
+    "ctx", "peak_ctx", "win", "win_certain", "win_conflict",
     "cum_input", "cum_output", "cum_cache", "full",
     "bridge_id", "bridge_short", "custom_title", "override_title",
     "initial_prompt", "last_prompt", "session_effort",

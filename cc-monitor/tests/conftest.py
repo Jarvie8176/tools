@@ -34,6 +34,8 @@ class FakeClaude:
         self.titles_file = os.path.join(root, "titles.json")
         self.settings_file = os.path.join(root, "settings.json")
         self.otel_file = os.path.join(root, "cc-monitor-otel.json")
+        self.windows_file = os.path.join(root, "cc-monitor-windows.json")
+        self.claude_json = os.path.join(root, "claude.json")
 
     def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
         d = os.path.join(self.proc, str(pid))
@@ -108,6 +110,16 @@ class FakeClaude:
         with open(self.otel_file, "w") as fh:
             json.dump(mapping, fh)
 
+    def windows(self, mapping: dict):
+        """Write the declared model_id -> window map (`null` = declared-unknown)."""
+        with open(self.windows_file, "w") as fh:
+            json.dump(mapping, fh)
+
+    def model_options(self, values):
+        """Write ~/.claude.json's additionalModelOptionsCache (list of fully-qualified model ids)."""
+        with open(self.claude_json, "w") as fh:
+            json.dump({"additionalModelOptionsCache": [{"value": v} for v in values]}, fh)
+
 
 @pytest.fixture
 def claude(tmp_path, monkeypatch):
@@ -123,6 +135,11 @@ def claude(tmp_path, monkeypatch):
     # Point at a fake (absent) OTel sidecar so per-session effort reads are hermetic — a test opts
     # in via fc.otel({...}); default is absent -> otel.read() None -> no s-effort column.
     monkeypatch.setattr(paths, "OTEL_FILE", fc.otel_file)
+    # Point at a fake (absent) windows map + ~/.claude.json so window resolution is hermetic — a
+    # test opts in via fc.windows(...) / fc.model_options(...). Default absent -> nothing declared,
+    # so windows resolve from env+peak alone and an undeclared model shows '?'.
+    monkeypatch.setattr(paths, "WINDOWS_FILE", fc.windows_file)
+    monkeypatch.setattr(paths, "CLAUDE_JSON", fc.claude_json)
     return fc
 
 

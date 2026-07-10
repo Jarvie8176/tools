@@ -1,15 +1,32 @@
-"""Context-window (200k vs 1M) resolution.
+"""Context-window resolution — declared, bounded by observation, never guessed.
 
-The true window is NOT in the transcript — the JSONL model field is always e.g.
-``claude-opus-4-8`` with no ``[1m]`` suffix. It IS recoverable from the worker's env
-(``ANTHROPIC_DEFAULT_<FAM>_MODEL`` carries ``[1m]``), reproducing Claude Code's own rule
-(``rE -> WIi``: ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` override, then the ``/\\[1m\\]/i`` regex).
+The window is NOT recoverable from anything Claude Code writes on the render path. Its transcript
+``message.model`` is bare, its OTel ``api_request`` event strips the ``[<n>m]`` suffix, and a
+default install carries no ``ANTHROPIC_DEFAULT_*_MODEL`` env at all — the CLI appends the suffix at
+RUNTIME from an account-level entitlement predicate. Any rule inferred from those inputs is a rule
+that silently stops holding, which is exactly how every session came to render a confident 200k.
 
-Two independent signals are combined so neither blind spot dominates:
-  1. worker env  — authoritative for low-usage sessions the peak can't classify
-  2. peak ctx    — a HARD LOWER BOUND: usage can't exceed the real window, so a peak above
-                   the env-derived value proves 1M (catches workers that got [1m] via CLI/other
-                   means where the env var is absent).
+So resolution layers three things, strongest evidence first:
+
+  1. worker env    — per-worker overrides: a ``[<n>m]`` default, the ``CLAUDE_CODE_DISABLE_1M_CONTEXT``
+                     kill switch, an honoured ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` ceiling. Exec-time
+                     evidence about the worker it was read from.
+  2. declaration   — the operator's ``model_id -> window`` map, prefilled from evidence by
+                     ``cc-monitor models --detect`` (see :mod:`cc_monitor.windows`).
+  3. peak ctx      — a HARD LOWER BOUND. Usage can never exceed the real window, so a peak above the
+                     resolved value proves it wrong: the window is promoted, and when the value it
+                     overrode was a declaration, the row is flagged as CONFLICTING so the operator
+                     sees that their map is stale rather than having it silently corrected.
+
+(The settings.json ``env`` block sits under the worker env as a fallback: Claude Code applies it
+internally so it never reaches ``/proc``, and a ``claude --resume`` worker's exec env lacks it.)
+
+Nothing decides -> ``certain`` is ``False`` and the UI shows '?'. A readable env with no model keys
+is absence of evidence, not evidence of a 200k window.
+
+Nothing here is enumerated: the family is derived from the model id and the window from the
+magnitude in the suffix, so a model launch needs no code change. A hard-coded family list is how
+Fable sessions were pinned to the baseline for as long as they were.
 """
 from __future__ import annotations
 
@@ -18,25 +35,47 @@ import re
 
 from . import paths
 
+# Shown (with '?') when nothing resolves the window — a placeholder for the percentage maths, never
+# an assertion. A real value comes from the operator's declaration, a `[<n>m]` suffix Claude Code
+# put in the env, or an observed peak; never from this constant.
 BASELINE = 200_000
 ONE_M = 1_000_000
-_1M_RE = re.compile(r"\[1m\]", re.IGNORECASE)
-# Exact keys only — a prefix match would also capture ANTHROPIC_DEFAULT_HEADERS (auth headers).
-# Public: settings.model_env() filters the settings.json `env` block by the SAME set, so the two
-# window sources (proc environ + settings env-block) stay in lockstep.
-MODEL_ENV_KEYS = frozenset({
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
+_TRUE = frozenset({"1", "true", "yes", "on"})
+# `[1m]` today, `[2m]` tomorrow — parse the magnitude rather than pattern-matching one literal.
+_SUFFIX_RE = re.compile(r"\[(\d+)m\]", re.IGNORECASE)
+# First purely-alphabetic segment after `claude-`: opus / sonnet / haiku / fable / whatever ships
+# next. Deriving the family instead of listing it is the difference between a monitor that survives
+# a model launch and one that silently pins the new family to the baseline (as the missing `fable`
+# entry did). Handles vendor-prefixed ids (`us.anthropic.claude-opus-…`) and legacy date-first ids.
+_FAMILY_RE = re.compile(r"claude[-_]([a-z0-9.\-]+)")
+# Any ANTHROPIC_DEFAULT_<FAMILY>_MODEL, anchored so the sibling *_MODEL_NAME / *_DESCRIPTION /
+# *_SUPPORTED_CAPABILITIES keys and ANTHROPIC_DEFAULT_HEADERS (auth headers) never match. Matching
+# the shape rather than an enumerated set is what lets a new family's default be honoured on day 0.
+_MODEL_KEY_RE = re.compile(r"^ANTHROPIC_DEFAULT_[A-Z0-9]+_MODEL$")
+_FLAG_KEYS = frozenset({
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    # The 1M kill switch. Per-worker, so it can legitimately contradict a per-model declaration:
+    # the declaration cannot know that one worker was launched with 1M disabled.
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+    # Gates whether CLAUDE_CODE_MAX_CONTEXT_TOKENS applies to a first-party model (see _ceiling).
+    "DISABLE_COMPACT",
 })
+
+
+def is_model_env_key(key: str) -> bool:
+    """Whether an env key is window-relevant and display-safe.
+
+    Public: settings.model_env() filters the settings.json `env` block by the SAME predicate, so the
+    two env-derived window sources (proc environ + settings env-block) stay in lockstep.
+    """
+    return key in _FLAG_KEYS or bool(_MODEL_KEY_RE.match(key))
 
 
 def read_model_env(pid, proc_dir: str | None = None):
     """Model/context env keys from /proc/<pid>/environ, or None if unreadable.
 
-    Deliberately narrow — only ANTHROPIC_DEFAULT_* and CLAUDE_CODE_MAX_CONTEXT keys are
-    kept, so secret env values are never surfaced (see feedback: never read plaintext secrets).
+    Deliberately narrow — only keys passing :func:`is_model_env_key` are kept, so secret env values
+    are never surfaced (see feedback: never read plaintext secrets).
     """
     if not pid:
         return None
@@ -49,73 +88,142 @@ def read_model_env(pid, proc_dir: str | None = None):
     env = {}
     for kv in raw.split("\0"):
         key, sep, val = kv.partition("=")
-        if sep and key in MODEL_ENV_KEYS:
+        if sep and is_model_env_key(key):
             env[key] = val
     return env
 
 
-def _family(model: str) -> str | None:
-    m = (model or "").lower()
-    if "opus" in m:
-        return "OPUS"
-    if "sonnet" in m:
-        return "SONNET"
-    if "haiku" in m:
-        return "HAIKU"
+def family(model: str) -> str | None:
+    """Model family derived from the id (``OPUS``, ``FABLE``, …), or None for a non-Claude model.
+
+    Derived, not enumerated: a hard-coded list goes stale the day a family ships, which is exactly
+    how every Fable session came to be pinned to the baseline window. The family drives the
+    ``ANTHROPIC_DEFAULT_<FAM>_MODEL`` lookup and the model-options prefill, so a miss here is a
+    silent wrong answer, not a visible error.
+    """
+    m = _FAMILY_RE.search((model or "").lower())
+    if not m:
+        return None
+    for token in re.split(r"[-_.]", m.group(1)):
+        if token.isalpha():  # skip version/date segments: claude-3-5-sonnet-…, …-opus-4-8
+            return token.upper()
     return None
 
 
+def suffix_window(model_id: str) -> int | None:
+    """Window encoded in a model id's ``[<n>m]`` suffix (``[1m]`` -> 1_000_000), else None.
+
+    Claude Code appends this at runtime from an account-level entitlement predicate. Reading the
+    magnitude rather than matching the literal ``[1m]`` keeps a future ``[2m]`` from resolving to
+    the baseline.
+    """
+    m = _SUFFIX_RE.search(model_id or "")
+    return int(m.group(1)) * 1_000_000 if m else None
+
+
+def _truthy(val) -> bool:
+    return isinstance(val, str) and val.strip().lower() in _TRUE
+
+
+def _ceiling(env, model) -> int | None:
+    """``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` if Claude Code would actually honour it, else None.
+
+    The CLI applies it in exactly two cases: when compaction is disabled outright, or when the
+    resolved model is not a first-party ``claude-*`` id. Treating it as an unconditional override
+    (as this module once did) reports a ceiling the running session is not subject to.
+    """
+    try:
+        mx = int(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", ""))
+    except (TypeError, ValueError):
+        return None  # str.isdigit() is True for '²' etc., which int() then rejects — never crash
+    if mx <= 0:
+        return None
+    if _truthy(env.get("DISABLE_COMPACT")):
+        return mx
+    return None if (model or "").strip().lower().startswith("claude-") else mx
+
+
+def _from_env(env, model):
+    """``(window, certain, authoritative)`` from the env alone — no peak, no declaration.
+
+    ``authoritative`` marks an honoured explicit ceiling: it must NOT be raised by the peak lower
+    bound, or a stale pre-throttle peak would clobber a deliberately lowered window.
+    """
+    if env is None:
+        return BASELINE, False, False  # unreadable: no evidence either way
+    mx = _ceiling(env, model)
+    if mx is not None:
+        return mx, True, True
+    if _truthy(env.get("CLAUDE_CODE_DISABLE_1M_CONTEXT")):
+        return BASELINE, True, False  # explicit per-worker kill switch: 200k, and we know it
+    fam = family(model)
+    effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
+    sfx = suffix_window(effective)
+    return (sfx, True, False) if sfx else (BASELINE, False, False)
+
+
+def promote_to_clear_peak(win, certain, peak_ctx, known=()):
+    """Raise ``win`` to clear an observed peak. Usage can never exceed the real window.
+
+    Promotes to the smallest window this host has actually SEEN that clears the peak (Claude Code's
+    own numbers, via statusLine), falling back to ``ONE_M``. The old rule — "peak above 200k, so
+    exactly 1M" — baked today's tiers in; a peak above every candidate now yields the peak itself,
+    flagged, because we know the window is at least that but cannot name it.
+    """
+    peak = peak_ctx or 0
+    if peak <= win:
+        return win, certain
+    bigger = sorted(w for w in {*known, ONE_M} if w > peak)
+    return (bigger[0], True) if bigger else (peak, False)
+
+
 def resolve_window(env, model, peak_ctx):
-    """Return ``(window, certain)``.
+    """Env-layer resolution. Returns ``(window, certain)``; ``certain=False`` means "unknown".
 
-    ``env`` is the dict from :func:`read_model_env` (``None`` if unreadable). ``certain`` is
-    ``False`` only when the env is unreadable AND peak<=200k — the one case the window is truly
-    unknowable locally (flagged '?' in the UI, resolvable via statusLine/OTel).
+    ``env`` is the dict from :func:`read_model_env` (``None`` if unreadable). A readable env that
+    simply carries no model keys is NOT evidence of a 200k window — Claude Code appends the ``[1m]``
+    suffix at runtime and needs no env at all — so it yields the baseline VALUE with
+    ``certain=False``.
     """
-    if env is not None:
-        # An explicit ceiling is authoritative — return early, BEFORE the peak lower-bound, so a
-        # stale pre-throttle peak can't clobber a deliberately lowered window. Parse defensively:
-        # str.isdigit() is True for Unicode digits (e.g. '²') that int() then rejects.
-        try:
-            mx = int(env.get("CLAUDE_CODE_MAX_CONTEXT_TOKENS", ""))
-        except ValueError:
-            mx = 0
-        if mx > 0:
-            return mx, True
-        fam = _family(model)
-        effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
-        win, certain = (ONE_M, True) if _1M_RE.search(effective) else (BASELINE, True)
-    else:
-        # No env: fall back to peak alone. 1M only if usage already proves it.
-        win, certain = (ONE_M, True) if (peak_ctx or 0) > BASELINE else (BASELINE, False)
-    if (peak_ctx or 0) > win:  # observed usage overrides a too-small INFERRED window
-        win, certain = ONE_M, True
-    return win, certain
+    win, certain, authoritative = _from_env(env, model)
+    return (win, certain) if authoritative else promote_to_clear_peak(win, certain, peak_ctx)
 
 
-def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted):
-    """Full window resolution layering the settings.json ``env`` block under the ``/proc`` env.
+def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted, declared=None, known=()):
+    """Resolve one session's window. Returns ``(window, certain, conflict)``.
 
-    The settings.json ``env`` block (e.g. ``ANTHROPIC_DEFAULT_OPUS_MODEL=…[1m]``) is applied
-    INTERNALLY by Claude Code, so it never reaches ``/proc/<pid>/environ`` — a ``claude --resume``
-    worker's exec env lacks it yet the worker still runs at the settings window. Reading ``/proc``
-    alone under-reports such a worker as 200k. But settings.json is a GLOBAL, TIME-VARYING source,
-    so it grants a WINDOW VALUE freely and CERTAINTY only with evidence:
+    ``declared`` is the operator's window for this exact model id (``None`` = undeclared -> '?').
+    ``conflict`` is True only when a declaration was contradicted by observed usage: the value is
+    corrected upward, and the caller surfaces the disagreement rather than hiding it.
 
-    - ``proc_env`` is authoritative (exec-time evidence). If it already resolves a window > baseline
-      (a spawner ``[1m]``/explicit ceiling, or peak proof), that answer stands — settings never
-      overrides observed evidence.
-    - ``proc_env is None`` (unreadable: permission/hidepid/gone) stays unknowable. We do NOT
-      fabricate certainty from global settings for an env we couldn't observe — it may carry an
-      unseen spawner override. Falls back to peak-only (``'?'`` unless usage proves it).
-    - Otherwise (proc readable, resolved to plain baseline) the settings block may RAISE the window.
-      That raise is ``certain`` only if ``settings_trusted`` (the worker demonstrably started under
-      the current settings — mtime <= start) OR peak already proves the larger window; else ``'?'``.
+    Precedence rationale:
+
+    - A per-worker env override is exec-time evidence about THIS worker and outranks the declaration,
+      which is per-model and cannot know that one worker was launched with the kill switch set.
+    - ``proc_env is None`` (permission / hidepid / gone) means a possible override went unobserved,
+      so the settings block may not fabricate certainty for it.
+    - The peak lower bound applies last, against ``known`` — every window the operator has declared
+      for any model — so a promotion lands on a real tier rather than a hard-coded 1M.
     """
-    win, certain = resolve_window(proc_env, model, peak_ctx)
-    if proc_env is None or win != BASELINE or not settings_env:
-        return win, certain  # unreadable / already-decided / nothing to add
-    s_win, _ = resolve_window({**settings_env, **proc_env}, model, peak_ctx)
-    if s_win <= win:
-        return win, certain  # settings only ever raises here; a lower global ceiling needs evidence
-    return s_win, bool(settings_trusted or (peak_ctx or 0) > BASELINE)
+    win, certain, authoritative = _from_env(proc_env, model)
+    if authoritative:
+        return win, certain, False
+    used_declared = False
+    if not certain:
+        if declared:
+            win, certain, used_declared = declared, True, True
+        elif proc_env is not None and settings_env:
+            # settings.json's env block is applied internally and never reaches /proc. It grants a
+            # VALUE freely but certainty only with evidence: the worker demonstrably started under
+            # the current settings, or usage already proves the larger window.
+            s_win, _, s_auth = _from_env({**settings_env, **proc_env}, model)
+            if s_auth or s_win > win:
+                proven = (peak_ctx or 0) > win
+                win, certain = s_win, bool(settings_trusted or proven)
+                if s_auth:
+                    return win, certain, False  # a settings ceiling is still a ceiling
+
+    final, final_certain = promote_to_clear_peak(win, certain, peak_ctx, known=known)
+    # Only usage can contradict a declaration we actually used. A per-worker env override that
+    # supersedes the declaration is not a conflict — it is the override doing its job.
+    return final, final_certain, used_declared and final != declared

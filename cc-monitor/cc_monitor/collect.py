@@ -11,7 +11,9 @@ import json
 import os
 import time
 
-from . import ccsession, config, otel, paths, settings, titles, transcript, window
+from . import (
+    ccsession, config, otel, paths, settings, titles, transcript, window, windows,
+)
 
 # Parse cache keyed by path -> ((mtime, size), result). The result carries an internal `_offset`
 # byte cursor: on a cache miss we extend the prior parse with only the appended bytes instead of
@@ -131,6 +133,11 @@ def collect(now: float | None = None) -> dict:
     # so we only TRUST the fallback for workers that started at/after this mtime (window.resolve).
     settings_env = settings.model_env()
     settings_mtime = settings.file_mtime()
+    # The operator's declared window per model id, prefilled by `cc-monitor models --detect`. Read
+    # once; joined per row by exact model id. An undeclared model resolves to '?' rather than to a
+    # guess. Its values double as the peak-promotion candidates (window.resolve).
+    declared = windows.load()
+    known_windows = set(declared.values())
     # Per-session OTel rollup (effort/cost/tokens keyed by session_id) — None when telemetry is off
     # or the sink never wrote. Read once; join per row. Absent -> per-session effort column stays
     # blank and the GLOBAL settings effortLevel header still shows (optional enrichment, like prom).
@@ -171,9 +178,10 @@ def collect(now: float | None = None) -> dict:
             settings_mtime is not None and started_at is not None
             and settings_mtime <= started_at / 1000
         )
-        win, win_certain = window.resolve(
+        win, win_certain, win_conflict = window.resolve(
             window.read_model_env(pid), settings_env, info.get("model"),
             info.get("peak_ctx", 0), settings_trusted,
+            declared=declared.get(info.get("model")), known=known_windows,
         )
         managed = sid[:8] in ledger  # a cc-session .url ledger hit — authoritative "managed" signal
         info.update({
@@ -189,7 +197,7 @@ def collect(now: float | None = None) -> dict:
             "status": "orphaned" if live == "orphaned"
             else _status(reg.get("status"), status_ts, info["mtime"], idle_s, gap),
             "idle_s": idle_s,
-            "win": win, "win_certain": win_certain,
+            "win": win, "win_certain": win_certain, "win_conflict": win_conflict,
             "override_title": titles.resolve(overrides, sid, bridge),
         })
         # per-session effort from the OTel sidecar (this session's own requests), distinct from the

@@ -26,6 +26,13 @@ def fmt_k(n: int) -> str:
     return f"{n / 1000:.1f}k" if n >= 1000 else str(n)
 
 
+def _win_flag(r: dict) -> str:
+    """'?' when nothing resolved the window, '!' when usage contradicted the declared one."""
+    if r.get("win_conflict"):
+        return "!"
+    return "" if r.get("win_certain") else "?"
+
+
 def trunc(s: str, n: int) -> str:
     """Sanitize control chars, then cut to n chars with an ellipsis marker when clipped."""
     s = _clean(s)
@@ -96,7 +103,8 @@ def render_text(d: dict) -> str:
         win, certain = r["win"], r["win_certain"]
         pct = 100 * r["ctx"] / win if win else 0
         bar = "#" * min(int(pct / 10), 10) + "." * (10 - min(int(pct / 10), 10))
-        ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{'' if certain else '?'}"
+        # '!' = usage outgrew the declared window, so the declaration is stale (never silent)
+        ctx_s = f"{fmt_k(r['ctx'])}/{fmt_k(win)}{_win_flag(r)}"
         cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
         mark = _glyph(r["status"])
         redact_on = cfg["redact_default"]
@@ -119,8 +127,9 @@ def render_text(d: dict) -> str:
         " or manual override; '—' = env-spawned GUI session, real title cloud-side."
     )
     lines.append(
-        " ctx = input-side (#27361-safe). window = worker environ [1m] rule + peak lower-bound;"
-        " '?' = env unreadable. INIT-PROMPT = opening user turn (stable); LAST-PROMPT = last user"
+        " ctx = input-side (#27361-safe). window = declared per model (cc-monitor models --detect)"
+        " + worker environ overrides + peak lower-bound; '?' = undeclared, '!' = usage outgrew the"
+        " declared window. INIT-PROMPT = opening user turn (stable); LAST-PROMPT = last user"
         " turn (volatile). header effort = settings.json effortLevel (global; '?' = unreadable);"
         " EFF col = per-session effort from OTel (latest request; '·' = telemetry off/no data)."
     )
@@ -131,7 +140,7 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     cfg = cfg or config.load()
     win, certain = r["win"], r["win_certain"]
     pct = 100 * r["ctx"] / win if win else 0
-    winlbl = f"{fmt_k(win)}{'' if certain else '?'}"
+    winlbl = f"{fmt_k(win)}{_win_flag(r)}"
     color = "#e5534b" if pct > cfg["ctx_crit_pct"] else "#d9a441" if pct > cfg["ctx_warn_pct"] else "#3fb950"
     stat_c = "#e5534b" if r["status"] == "orphaned" else "#3fb950" if r["status"] == "busy" else "#8b949e"
     cum = f"{fmt_k(r['cum_input'])}/{fmt_k(r['cum_output'])}" if r["full"] else "(big)"
@@ -208,5 +217,5 @@ def render_html(d: dict, refresh: int = 3) -> str:
  title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  initial-prompt = opening user turn (stable) / last-prompt = latest (volatile) &nbsp;|&nbsp;
  header effort = settings.json effortLevel (global; "?" = unreadable); s-effort = per-session effort from OTel (latest request; "·" = telemetry off/no data) &nbsp;|&nbsp;
- window = worker environ [1m] rule + peak lower-bound; "?" = env unreadable</div>
+ window = declared per model (<code>cc-monitor models --detect</code>) + worker environ overrides + peak lower-bound; "?" = undeclared, "!" = usage outgrew the declared window</div>
 """

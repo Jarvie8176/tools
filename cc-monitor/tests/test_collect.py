@@ -69,13 +69,53 @@ def test_resume_worker_window_uncertain_when_settings_changed_after_start(claude
     assert (row["win"], row["win_certain"]) == (1_000_000, False)
 
 
-def test_default_200k_when_no_proc_and_no_settings_1m(claude):
-    # no [1m] anywhere (proc empty, settings has no env) -> genuinely 200k, and certain
+def test_no_evidence_anywhere_is_uncertain(claude):
+    # No [1m] anywhere and no statusLine sample. Claude Code needs no env to run a 1M session, so
+    # this is "unknown" (flagged '?'), NOT a confident 200k — the bug that showed every session,
+    # 1M or not, as 200k.
     claude.registry(411, "u", "/home/x/p")
     claude.proc_alive(411, {})
     claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=50_000)])
     row = collect.collect()["rows"][0]
-    assert (row["win"], row["win_certain"]) == (200_000, True)
+    assert (row["win"], row["win_certain"]) == (200_000, False)
+
+
+def test_headless_worker_window_from_declaration(claude):
+    # The reported bug, end to end: an `sdk-cli` worker's transcript model is bare
+    # `claude-opus-4-8` and no ANTHROPIC_DEFAULT_* env exists. The declared map resolves it.
+    claude.windows({"claude-opus-4-8": 1_000_000})
+    claude.registry(413, "headless", "/home/x/p", entrypoint="sdk-cli")
+    claude.proc_alive(413, {})
+    claude.transcript("headless", "/home/x/p", [assistant("claude-opus-4-8", inp=50_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_conflict"]) == (1_000_000, True, False)
+
+
+def test_undeclared_model_row_is_flagged(claude):
+    claude.registry(414, "u", "/home/x/p")
+    claude.proc_alive(414, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=50_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_conflict"]) == (200_000, False, False)
+
+
+def test_stale_declaration_conflicts_when_usage_outgrows_it(claude):
+    claude.windows({"claude-opus-4-8": 200_000})
+    claude.registry(415, "u", "/home/x/p")
+    claude.proc_alive(415, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=400_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_conflict"]) == (1_000_000, True, True)
+
+
+def test_null_declaration_means_undecided_not_baseline(claude):
+    # a prefilled `null` must not read as "the operator said 200k"
+    claude.windows({"claude-opus-4-8": None})
+    claude.registry(416, "u", "/home/x/p")
+    claude.proc_alive(416, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"]) == (200_000, False)
 
 
 def test_title_precedence_override_beats_custom(claude):

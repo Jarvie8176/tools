@@ -56,6 +56,12 @@ def _num(v) -> int:
     return v if isinstance(v, int) and not isinstance(v, bool) else 0
 
 
+def input_side_tokens(usage) -> int:
+    """Input-side context of one assistant turn. Public: windows.detect() folds the same quantity
+    across transcripts, and it must not drift from what the dashboard calls `ctx`."""
+    return _ctx_of(usage) if isinstance(usage, dict) else 0
+
+
 def _ctx_of(usage: dict) -> int:
     return (
         _num(usage.get("input_tokens"))
