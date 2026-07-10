@@ -146,3 +146,56 @@ def test_resolve_settings_max_context_untrusted_uncertain():
     s = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000", "DISABLE_COMPACT": "1"}
     assert window.resolve({}, s, "claude-opus-4-8", 10_000, False) == (500_000, False)
     assert window.resolve({}, s, "claude-opus-4-8", 10_000, True) == (500_000, True)
+
+
+# --- mechanized derivation: a model launch must not require a code change ---
+
+
+def test_family_derived_not_enumerated():
+    # every id shape Claude Code emits, plus a family that does not exist yet
+    assert window.family("claude-opus-4-8") == "OPUS"
+    assert window.family("claude-fable-5[1m]") == "FABLE"
+    assert window.family("claude-haiku-4-5-20251001") == "HAIKU"
+    assert window.family("claude-3-5-sonnet-20241022") == "SONNET"  # legacy date-first id
+    assert window.family("us.anthropic.claude-opus-4-8-v1:0") == "OPUS"  # bedrock prefix
+    assert window.family("claude-mythos-preview") == "MYTHOS"  # unshipped family, no code change
+    assert window.family("my-org/custom-llm") is None
+    assert window.family("") is None
+
+
+def test_unknown_family_env_default_is_honoured():
+    # a family nobody has heard of yet still resolves from its own ANTHROPIC_DEFAULT_*_MODEL
+    env = {"ANTHROPIC_DEFAULT_MYTHOS_MODEL": "claude-mythos-preview[1m]"}
+    assert window.resolve_window(env, "claude-mythos-preview", 0) == (1_000_000, True)
+
+
+def test_suffix_magnitude_parsed_not_matched():
+    assert window.suffix_window("claude-opus-4-8[1m]") == 1_000_000
+    assert window.suffix_window("claude-opus-9-0[2m]") == 2_000_000  # future tier, no code change
+    assert window.suffix_window("claude-opus-4-8") is None
+
+
+def test_two_m_suffix_resolves_to_two_m():
+    env = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-9-0[2m]"}
+    assert window.resolve_window(env, "claude-opus-9-0", 0) == (2_000_000, True)
+
+
+def test_model_env_key_predicate_excludes_siblings():
+    assert window.is_model_env_key("ANTHROPIC_DEFAULT_MYTHOS_MODEL")  # unknown family, allowed
+    assert not window.is_model_env_key("ANTHROPIC_DEFAULT_OPUS_MODEL_NAME")
+    assert not window.is_model_env_key("ANTHROPIC_DEFAULT_OPUS_MODEL_SUPPORTED_CAPABILITIES")
+    assert not window.is_model_env_key("ANTHROPIC_DEFAULT_HEADERS")
+    assert not window.is_model_env_key("ANTHROPIC_API_KEY")
+
+
+def test_peak_promotes_to_smallest_observed_window():
+    # a 2M sighting on this host means a 1.4M peak promotes to 2M, not to a hard-coded 1M
+    class Cal:
+        sessions, families, options, one_m_seen = {}, {"OPUS": 2_000_000}, {}, True
+    assert window.resolve({}, {}, "claude-sonnet-5", 1_400_000, False, cal=Cal()) == (2_000_000, True)
+
+
+def test_peak_beyond_every_known_window_is_flagged_not_guessed():
+    # usage above every candidate proves the window is at least the peak, but not what it IS.
+    # Reporting a hard-coded 1M here would be a window smaller than the observed usage.
+    assert window.resolve_window({}, "claude-opus-4-8", 1_500_000) == (1_500_000, False)

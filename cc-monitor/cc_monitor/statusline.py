@@ -131,8 +131,9 @@ def model_options(path: str | None = None) -> dict:
         if not isinstance(val, str):
             continue
         fam = window.family(val)
-        if fam and window.has_1m(val):
-            out[fam] = window.ONE_M
+        win = window.suffix_window(val)
+        if fam and win:
+            out[fam] = win
     _OPTIONS_CACHE.update(key=key, value=out)
     return out
 
@@ -144,8 +145,8 @@ def calibrate(dir_path: str | None = None, claude_json: str | None = None) -> Ca
     one_m_seen = False
     for rec in samples.values():
         mid = rec.get("model_id") or ""
-        if window.has_1m(mid):
-            one_m_seen = True
+        if window.suffix_window(mid):
+            one_m_seen = True  # the account demonstrably receives the entitlement suffix
         fam = window.family(mid)
         win = rec.get("win")
         if not fam or not win:

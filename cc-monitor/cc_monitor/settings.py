@@ -45,12 +45,12 @@ def model_env(path: str | None = None) -> dict:
 
     Claude Code applies this ``env`` block INTERNALLY to every session, so these keys never reach
     ``/proc/<pid>/environ`` (see :func:`cc_monitor.window.merge_model_env`). Filtered to exactly
-    ``window.MODEL_ENV_KEYS`` and string values — never other env entries (the block also holds
+    :func:`window.is_model_env_key` and string values — never other env entries (the block also holds
     PATH, and could hold secrets), so nothing sensitive is surfaced."""
     env = _read(path).get("env")
     if not isinstance(env, dict):
         return {}
-    return {k: v for k, v in env.items() if k in window.MODEL_ENV_KEYS and isinstance(v, str)}
+    return {k: v for k, v in env.items() if window.is_model_env_key(k) and isinstance(v, str)}
 
 
 def file_mtime(path: str | None = None) -> float | None:

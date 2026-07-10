@@ -37,32 +37,48 @@ import re
 
 from . import paths
 
+# Shown (with '?') when nothing resolves the window — a placeholder for the percentage maths, never
+# an assertion. Every real value comes from Claude Code itself: a statusLine `context_window_size`,
+# or the `[<n>m]` suffix it appends to a model id.
 BASELINE = 200_000
 ONE_M = 1_000_000
-_1M_RE = re.compile(r"\[1m\]", re.IGNORECASE)
 _TRUE = frozenset({"1", "true", "yes", "on"})
-_FAMILIES = ("opus", "sonnet", "haiku", "fable")
-# Exact keys only — a prefix match would also capture ANTHROPIC_DEFAULT_HEADERS (auth headers).
-# Public: settings.model_env() filters the settings.json `env` block by the SAME set, so the two
-# env-derived window sources (proc environ + settings env-block) stay in lockstep.
-MODEL_ENV_KEYS = frozenset(
-    [f"ANTHROPIC_DEFAULT_{f.upper()}_MODEL" for f in _FAMILIES] + [
-        "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-        # The 1M kill switch. Per-worker, so it is the one thing that can legitimately contradict
-        # the account-global statusLine generalisation (layer 3) — without reading it that
-        # inference would be unsound.
-        "CLAUDE_CODE_DISABLE_1M_CONTEXT",
-        # Gates whether CLAUDE_CODE_MAX_CONTEXT_TOKENS applies to a first-party model (see _ceiling).
-        "DISABLE_COMPACT",
-    ]
-)
+# `[1m]` today, `[2m]` tomorrow — parse the magnitude rather than pattern-matching one literal.
+_SUFFIX_RE = re.compile(r"\[(\d+)m\]", re.IGNORECASE)
+# First purely-alphabetic segment after `claude-`: opus / sonnet / haiku / fable / whatever ships
+# next. Deriving the family instead of listing it is the difference between a monitor that survives
+# a model launch and one that silently pins the new family to the baseline (as the missing `fable`
+# entry did). Handles vendor-prefixed ids (`us.anthropic.claude-opus-…`) and legacy date-first ids.
+_FAMILY_RE = re.compile(r"claude[-_]([a-z0-9.\-]+)")
+# Any ANTHROPIC_DEFAULT_<FAMILY>_MODEL, anchored so the sibling *_MODEL_NAME / *_DESCRIPTION /
+# *_SUPPORTED_CAPABILITIES keys and ANTHROPIC_DEFAULT_HEADERS (auth headers) never match. Matching
+# the shape rather than an enumerated set is what lets a new family's default be honoured on day 0.
+_MODEL_KEY_RE = re.compile(r"^ANTHROPIC_DEFAULT_[A-Z0-9]+_MODEL$")
+_FLAG_KEYS = frozenset({
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+    # The 1M kill switch. Per-worker, so it is the one thing that can legitimately contradict the
+    # account-global statusLine generalisation (layer 3) — without reading it that inference would
+    # be unsound.
+    "CLAUDE_CODE_DISABLE_1M_CONTEXT",
+    # Gates whether CLAUDE_CODE_MAX_CONTEXT_TOKENS applies to a first-party model (see _ceiling).
+    "DISABLE_COMPACT",
+})
+
+
+def is_model_env_key(key: str) -> bool:
+    """Whether an env key is window-relevant and display-safe.
+
+    Public: settings.model_env() filters the settings.json `env` block by the SAME predicate, so the
+    two env-derived window sources (proc environ + settings env-block) stay in lockstep.
+    """
+    return key in _FLAG_KEYS or bool(_MODEL_KEY_RE.match(key))
 
 
 def read_model_env(pid, proc_dir: str | None = None):
     """Model/context env keys from /proc/<pid>/environ, or None if unreadable.
 
-    Deliberately narrow — only the keys in :data:`MODEL_ENV_KEYS` are kept, so secret env values are
-    never surfaced (see feedback: never read plaintext secrets).
+    Deliberately narrow — only keys passing :func:`is_model_env_key` are kept, so secret env values
+    are never surfaced (see feedback: never read plaintext secrets).
     """
     if not pid:
         return None
@@ -75,28 +91,37 @@ def read_model_env(pid, proc_dir: str | None = None):
     env = {}
     for kv in raw.split("\0"):
         key, sep, val = kv.partition("=")
-        if sep and key in MODEL_ENV_KEYS:
+        if sep and is_model_env_key(key):
             env[key] = val
     return env
 
 
 def family(model: str) -> str | None:
-    """Model family (``OPUS``/``SONNET``/``HAIKU``/``FABLE``), or None if unrecognised.
+    """Model family derived from the id (``OPUS``, ``FABLE``, …), or None for a non-Claude model.
 
-    Mirrors Claude Code's own family list. Omitting ``fable`` silently pinned every Fable session to
-    the baseline window, since the family drives both the env lookup and the statusLine
-    generalisation.
+    Derived, not enumerated: a hard-coded list goes stale the day a family ships, which is exactly
+    how every Fable session came to be pinned to the baseline window. The family drives both the
+    ``ANTHROPIC_DEFAULT_<FAM>_MODEL`` lookup and the statusLine generalisation, so a miss here is a
+    silent wrong answer, not a visible error.
     """
-    m = (model or "").lower()
-    for fam in _FAMILIES:
-        if fam in m:
-            return fam.upper()
+    m = _FAMILY_RE.search((model or "").lower())
+    if not m:
+        return None
+    for token in re.split(r"[-_.]", m.group(1)):
+        if token.isalpha():  # skip version/date segments: claude-3-5-sonnet-…, …-opus-4-8
+            return token.upper()
     return None
 
 
-def has_1m(model_id: str) -> bool:
-    """True when a model id carries the ``[1m]`` suffix Claude Code appends for a 1M window."""
-    return bool(model_id) and bool(_1M_RE.search(model_id))
+def suffix_window(model_id: str) -> int | None:
+    """Window encoded in a model id's ``[<n>m]`` suffix (``[1m]`` -> 1_000_000), else None.
+
+    Claude Code appends this at runtime from an account-level entitlement predicate. Reading the
+    magnitude rather than matching the literal ``[1m]`` keeps a future ``[2m]`` from resolving to
+    the baseline.
+    """
+    m = _SUFFIX_RE.search(model_id or "")
+    return int(m.group(1)) * 1_000_000 if m else None
 
 
 def _truthy(val) -> bool:
@@ -121,31 +146,57 @@ def _ceiling(env, model) -> int | None:
     return None if (model or "").strip().lower().startswith("claude-") else mx
 
 
+def _from_env(env, model):
+    """``(window, certain, authoritative)`` from the env alone — no peak, no calibration.
+
+    ``authoritative`` marks an honoured explicit ceiling: it must NOT be raised by the peak lower
+    bound, or a stale pre-throttle peak would clobber a deliberately lowered window.
+    """
+    if env is None:
+        return BASELINE, False, False  # unreadable: no evidence either way
+    mx = _ceiling(env, model)
+    if mx is not None:
+        return mx, True, True
+    if _truthy(env.get("CLAUDE_CODE_DISABLE_1M_CONTEXT")):
+        return BASELINE, True, False  # explicit per-worker kill switch: 200k, and we know it
+    fam = family(model)
+    effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
+    sfx = suffix_window(effective)
+    return (sfx, True, False) if sfx else (BASELINE, False, False)
+
+
+def _apply_peak(win, certain, peak_ctx, known=()):
+    """Raise ``win`` to clear an observed peak. Usage can never exceed the real window.
+
+    Promotes to the smallest window this host has actually SEEN that clears the peak (Claude Code's
+    own numbers, via statusLine), falling back to ``ONE_M``. The old rule — "peak above 200k, so
+    exactly 1M" — baked today's tiers in; a peak above every candidate now yields the peak itself,
+    flagged, because we know the window is at least that but cannot name it.
+    """
+    peak = peak_ctx or 0
+    if peak <= win:
+        return win, certain
+    bigger = sorted(w for w in {*known, ONE_M} if w > peak)
+    return (bigger[0], True) if bigger else (peak, False)
+
+
 def resolve_window(env, model, peak_ctx):
     """Env-layer resolution. Returns ``(window, certain)``; ``certain=False`` means "unknown".
 
     ``env`` is the dict from :func:`read_model_env` (``None`` if unreadable). A readable env that
-    simply carries no model keys is NOT evidence of a 200k window — Claude Code needs no env at all
-    to run a 1M session — so it yields the baseline VALUE with ``certain=False``.
+    simply carries no model keys is NOT evidence of a 200k window — Claude Code appends the ``[1m]``
+    suffix at runtime and needs no env at all — so it yields the baseline VALUE with
+    ``certain=False``.
     """
-    if env is None:
-        # Env unreadable: fall back to peak alone. 1M only if usage already proves it.
-        win, certain = (ONE_M, True) if (peak_ctx or 0) > BASELINE else (BASELINE, False)
-    else:
-        mx = _ceiling(env, model)
-        if mx is not None:
-            # An honoured ceiling is authoritative — return BEFORE the peak lower bound, so a stale
-            # pre-throttle peak cannot clobber a deliberately lowered window.
-            return mx, True
-        if _truthy(env.get("CLAUDE_CODE_DISABLE_1M_CONTEXT")):
-            win, certain = BASELINE, True  # explicit per-worker kill switch: 200k, and we know it
-        else:
-            fam = family(model)
-            effective = (env.get(f"ANTHROPIC_DEFAULT_{fam}_MODEL", "") if fam else "") or model or ""
-            win, certain = (ONE_M, True) if _1M_RE.search(effective) else (BASELINE, False)
-    if (peak_ctx or 0) > win:  # observed usage overrides any smaller inferred window
-        win, certain = ONE_M, True
-    return win, certain
+    win, certain, authoritative = _from_env(env, model)
+    return (win, certain) if authoritative else _apply_peak(win, certain, peak_ctx)
+
+
+def _known_windows(cal):
+    """Every window value Claude Code has actually reported here — the peak-promotion candidates."""
+    if cal is None:
+        return ()
+    return {w for w in (*(cal.families or {}).values(), *(cal.options or {}).values()) if w}
 
 
 def _from_calibration(cal, model, session_id):
@@ -187,24 +238,23 @@ def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted, cal=None,
     - ``proc_env is None`` (permission/hidepid/gone) means a possible override went unobserved, so
       the settings block may not fabricate certainty for it. A statusLine sample keyed to that very
       ``session_id`` is still direct observation of the session itself, and does apply.
-    - Otherwise the calibration decides; the settings block is the last value source before the peak
-      lower bound.
+    - The peak lower bound is applied ONCE, at the end, against every window this host has seen.
     """
-    win, certain = resolve_window(proc_env, model, peak_ctx)
-    if certain:
-        return win, certain  # env (or the peak lower bound) already produced hard evidence
-
-    hit = _from_calibration(cal, model, session_id)
-    if hit is not None:
-        win, certain = hit
-        if (peak_ctx or 0) > win:
-            win, certain = ONE_M, True
+    win, certain, authoritative = _from_env(proc_env, model)
+    if authoritative:
         return win, certain
-
-    if proc_env is None or not settings_env:
-        return win, certain  # unobservable env / nothing left to add
-
-    s_win, _ = resolve_window({**settings_env, **proc_env}, model, peak_ctx)
-    if s_win <= win:
-        return win, certain  # settings only ever raises here; a lower ceiling needs evidence
-    return s_win, bool(settings_trusted or (peak_ctx or 0) > BASELINE)
+    if not certain:
+        hit = _from_calibration(cal, model, session_id)
+        if hit is not None:
+            win, certain = hit
+        elif proc_env is not None and settings_env:
+            # The settings.json env block is applied internally and never reaches /proc. It grants a
+            # VALUE freely but certainty only with evidence: the worker demonstrably started under
+            # the current settings, or usage already proves the larger window.
+            s_win, _, s_auth = _from_env({**settings_env, **proc_env}, model)
+            if s_auth or s_win > win:
+                proven = (peak_ctx or 0) > win
+                win, certain = s_win, bool(settings_trusted or proven)
+                if s_auth:
+                    return win, certain  # a settings ceiling is still a ceiling
+    return _apply_peak(win, certain, peak_ctx, known=_known_windows(cal))

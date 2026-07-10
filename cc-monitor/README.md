@@ -19,7 +19,7 @@ that by reading the authoritative local sources directly.
 | `~/.claude/projects/<slug>/<uuid>.jsonl` | model, token usage, context (input-side → unaffected by [#27361](https://github.com/anthropics/claude-code/issues/27361)), `custom-title`, initial prompt (opening turn, stable), last prompt (latest, volatile) |
 | `~/.claude/cc-monitor-statusline/<uuid>.json` | **true context window (200k vs 1M)** and per-session effort, captured from Claude Code's statusLine payload (`install/statusline-capture.sh`). The one local channel carrying the real window: the CLI appends the `[1m]` suffix at runtime from an account-level entitlement, so the transcript's model field, the OTel `api_request` event and `/proc` may all show a bare `claude-opus-4-8` for a 1M session. Only TUI sessions render a statusLine, so a sample is generalised to same-family sessions — see below |
 | `/proc/<pid>/environ` | per-worker window **overrides**: an `ANTHROPIC_DEFAULT_*_MODEL` bearing `[1m]`, the `CLAUDE_CODE_DISABLE_1M_CONTEXT` kill switch, and `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (honoured only when `DISABLE_COMPACT` is set or the model is not first-party — mirroring the CLI) |
-| `~/.claude.json` | `additionalModelOptionsCache` only — fully-qualified model ids for families beyond the built-ins, used to resolve a family with no statusLine sample yet |
+| `~/.claude.json` | `additionalModelOptionsCache` only — Claude Code's own server-fetched list of fully-qualified model ids (suffix included), used to resolve a family with no statusLine sample yet |
 | `~/.claude/settings.json` | current reasoning `effortLevel` (global CLI setting; header only, `?` if unreadable); and the `env`-block window keys as a **fallback** beneath `/proc` — Claude Code applies them internally so they never reach `/proc/environ`. The fallback supplies the value but is marked certain only when the worker started at/after the settings mtime (else `?`, unless usage already proves the window) |
 | `~/.claude/cc-monitor-otel.json` | **optional** per-session effort (`s-effort` column) — an OTel rollup sidecar written by the embedded OTLP sink (see below). Preferred over the statusLine sample: it reflects the effort a request actually ran at. Absent → falls back to statusLine, else blank |
 | `/tmp/cc-session/claude.prom` | **optional** cc-session supervisor health (header only; absent → standalone view) |
@@ -52,6 +52,13 @@ hit wins:
 6. **peak context** — a hard lower bound: usage above the resolved window proves 1M regardless.
 
 Nothing decides → `?`. A readable env with no model keys is **not** evidence of 200k.
+
+**Nothing here is enumerated.** The family is derived from the model id (`claude-<family>-…`, also
+handling `us.anthropic.claude-…` and legacy `claude-3-5-sonnet-…`), the window from the magnitude in
+the `[<n>m]` suffix, and the env keys from the `ANTHROPIC_DEFAULT_<FAMILY>_MODEL` shape. A model
+launch needs no code change — a hard-coded family list is precisely how every Fable session came to
+be pinned to the baseline. The peak lower bound promotes to the smallest window this host has
+actually observed, not to a hard-coded 1M; a peak above every candidate is flagged, not guessed.
 
 > **Boundary.** The generalisation assumes one account on one host — cc-monitor's stated scope. Two
 > accounts sharing a `~/.claude`, or a per-worker entitlement that `/proc` cannot show, would break
