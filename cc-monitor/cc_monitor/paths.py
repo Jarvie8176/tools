@@ -27,3 +27,14 @@ METRICS_FILE = os.path.expanduser(os.environ.get("CC_MONITOR_METRICS_FILE", ""))
 OTEL_FILE = os.path.expanduser(
     os.environ.get("CC_MONITOR_OTEL_FILE", os.path.join(CLAUDE_HOME, "cc-monitor-otel.json"))
 )
+# Per-session statusLine samples, one file per session_id (install/statusline-capture.sh writes
+# them). The ONLY local channel carrying the true context window — see statusline.py / window.py.
+STATUSLINE_DIR = os.path.expanduser(
+    os.environ.get("CC_MONITOR_STATUSLINE_DIR", os.path.join(CLAUDE_HOME, "cc-monitor-statusline"))
+)
+# Claude Code's ~/.claude.json, read ONLY for `additionalModelOptionsCache` — its entries carry
+# fully-qualified model ids (e.g. a fable id bearing the `[1m]` suffix) for the families the CLI
+# offers beyond the built-ins. Never surfaced wholesale: the file also holds oauth account data.
+CLAUDE_JSON = os.path.expanduser(
+    os.environ.get("CC_MONITOR_CLAUDE_JSON", os.path.join(CLAUDE_HOME, os.pardir, ".claude.json"))
+)

@@ -6,10 +6,10 @@ def test_env_1m_default_is_certain_1m():
     assert window.resolve_window(env, "claude-opus-4-8", 50_000) == (1_000_000, True)
 
 
-def test_env_no_1m_is_certain_200k():
-    # env readable, no [1m] default -> genuinely 200k even though model is opus
-    env = {}
-    assert window.resolve_window(env, "claude-opus-4-8", 150_000) == (200_000, True)
+def test_env_readable_but_empty_is_uncertain_200k():
+    # A readable env with no model keys is NOT evidence of 200k: Claude Code appends [1m] at
+    # runtime from an account-level predicate and needs no env at all. Value yes, certainty no.
+    assert window.resolve_window({}, "claude-opus-4-8", 150_000) == (200_000, False)
 
 
 def test_peak_lower_bound_overrides_env_guess():
@@ -18,9 +18,21 @@ def test_peak_lower_bound_overrides_env_guess():
     assert window.resolve_window(env, "claude-opus-4-8", 369_000) == (1_000_000, True)
 
 
-def test_max_context_override_wins():
+def test_max_context_ignored_for_first_party_model_without_disable_compact():
+    # Claude Code only honours the ceiling when compaction is off, or for a non-`claude-*` model.
+    # Reporting it unconditionally showed a ceiling the running session was never subject to.
     env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"}
+    assert window.resolve_window(env, "claude-opus-4-8", 10_000) == (200_000, False)
+
+
+def test_max_context_honoured_with_disable_compact():
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000", "DISABLE_COMPACT": "1"}
     assert window.resolve_window(env, "claude-opus-4-8", 10_000) == (500_000, True)
+
+
+def test_max_context_honoured_for_third_party_model():
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"}
+    assert window.resolve_window(env, "my-org/custom-llm", 10_000) == (500_000, True)
 
 
 def test_env_unreadable_low_peak_is_uncertain():
@@ -32,8 +44,22 @@ def test_env_unreadable_high_peak_is_certain_1m():
     assert window.resolve_window(None, "claude-opus-4-8", 800_000) == (1_000_000, True)
 
 
-def test_sonnet_defaults_200k():
-    assert window.resolve_window({}, "claude-sonnet-5", 50_000) == (200_000, True)
+def test_sonnet_no_evidence_is_uncertain():
+    assert window.resolve_window({}, "claude-sonnet-5", 50_000) == (200_000, False)
+
+
+def test_fable_family_recognised():
+    # `fable` was missing from the family list, so ANTHROPIC_DEFAULT_FABLE_MODEL never resolved and
+    # every Fable session pinned to the baseline window.
+    assert window.family("claude-fable-5") == "FABLE"
+    env = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]"}
+    assert window.resolve_window(env, "claude-fable-5", 50_000) == (1_000_000, True)
+
+
+def test_disable_1m_kill_switch_is_certain_200k():
+    env = {"CLAUDE_CODE_DISABLE_1M_CONTEXT": "1",
+           "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    assert window.resolve_window(env, "claude-opus-4-8", 50_000) == (200_000, True)
 
 
 def test_read_model_env_masks_non_model_keys(claude):
@@ -50,18 +76,20 @@ def test_read_model_env_missing_proc_returns_none(claude):
 
 def test_explicit_max_context_not_clobbered_by_peak():
     # a deliberately-lowered ceiling must win even when a stale peak exceeds it
-    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "300000"}
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "300000", "DISABLE_COMPACT": "true"}
     assert window.resolve_window(env, "claude-opus-4-8", 400_000) == (300_000, True)
 
 
 def test_max_context_unicode_digit_no_crash():
     # str.isdigit() is True for '²' but int('²') raises — must fall back, not crash
-    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "²", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "²", "DISABLE_COMPACT": "1",
+           "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
     assert window.resolve_window(env, "claude-opus-4-8", 0) == (1_000_000, True)
 
 
 def test_max_context_zero_ignored():
-    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "0", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
+    env = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "0", "DISABLE_COMPACT": "1",
+           "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
     assert window.resolve_window(env, "claude-opus-4-8", 10_000) == (1_000_000, True)
 
 
@@ -107,13 +135,14 @@ def test_resolve_proc_override_wins_over_settings():
     assert window.resolve(proc, {}, "claude-opus-4-8", 10_000, False) == (1_000_000, True)
 
 
-def test_resolve_no_settings_readable_proc_is_certain_200k():
-    # observed env, no override, no settings default -> 200k certain (unchanged baseline behaviour)
-    assert window.resolve({}, {}, "claude-opus-4-8", 150_000, False) == (200_000, True)
+def test_resolve_no_evidence_anywhere_is_uncertain():
+    # observed env, no override, no settings default, no calibration -> unknown, flagged '?'.
+    # This is the default install, and the case that used to render a confident (wrong) 200k.
+    assert window.resolve({}, {}, "claude-opus-4-8", 150_000, False) == (200_000, False)
 
 
 def test_resolve_settings_max_context_untrusted_uncertain():
     # a settings MAX_CONTEXT ceiling (>baseline) is provisional too -> value yes, certainty gated
-    s = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"}
+    s = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000", "DISABLE_COMPACT": "1"}
     assert window.resolve({}, s, "claude-opus-4-8", 10_000, False) == (500_000, False)
     assert window.resolve({}, s, "claude-opus-4-8", 10_000, True) == (500_000, True)

@@ -119,10 +119,11 @@ def render_text(d: dict) -> str:
         " or manual override; '—' = env-spawned GUI session, real title cloud-side."
     )
     lines.append(
-        " ctx = input-side (#27361-safe). window = worker environ [1m] rule + peak lower-bound;"
-        " '?' = env unreadable. INIT-PROMPT = opening user turn (stable); LAST-PROMPT = last user"
+        " ctx = input-side (#27361-safe). window = statusLine sample (per-session, else same-family)"
+        " + worker environ overrides + peak lower-bound; '?' = no evidence yet (install the"
+        " statusLine capture). INIT-PROMPT = opening user turn (stable); LAST-PROMPT = last user"
         " turn (volatile). header effort = settings.json effortLevel (global; '?' = unreadable);"
-        " EFF col = per-session effort from OTel (latest request; '·' = telemetry off/no data)."
+        " EFF col = per-session effort from OTel, else statusLine ('·' = no data)."
     )
     return "\n".join(lines)
 
@@ -207,6 +208,6 @@ def render_html(d: dict, refresh: int = 3) -> str:
  ● busy = generating / ◐ active = registered, reachable connection / ⚠ orphaned = present but not reachable &nbsp;|&nbsp;
  title = custom-title or manual override; "— (cloud-side)" = env-spawned GUI session, real title cloud-side &nbsp;|&nbsp;
  initial-prompt = opening user turn (stable) / last-prompt = latest (volatile) &nbsp;|&nbsp;
- header effort = settings.json effortLevel (global; "?" = unreadable); s-effort = per-session effort from OTel (latest request; "·" = telemetry off/no data) &nbsp;|&nbsp;
- window = worker environ [1m] rule + peak lower-bound; "?" = env unreadable</div>
+ header effort = settings.json effortLevel (global; "?" = unreadable); s-effort = per-session effort from OTel, else statusLine ("·" = no data) &nbsp;|&nbsp;
+ window = statusLine sample (per-session, else same-family) + worker environ overrides + peak lower-bound; "?" = no evidence yet</div>
 """
