@@ -109,43 +109,43 @@ _S1M = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
 def test_resolve_resume_worker_trusted_is_certain_1m():
     # `claude --resume` proc env lacks [1m] (settings applied internally). With the worker started
     # under the current settings (trusted), the fallback resolves to 1M with certainty.
-    assert window.resolve({}, _S1M, "claude-opus-4-8", 61_000, True) == (1_000_000, True)
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 61_000, True) == (1_000_000, True, False)
 
 
 def test_resolve_settings_untrusted_is_uncertain():
     # settings changed after the worker started (untrusted): supply the 1M VALUE but flag '?'.
-    assert window.resolve({}, _S1M, "claude-opus-4-8", 61_000, False) == (1_000_000, False)
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 61_000, False) == (1_000_000, False, False)
 
 
 def test_resolve_untrusted_but_peak_proves_1m():
     # even untrusted, usage above baseline is hard proof -> certain 1M
-    assert window.resolve({}, _S1M, "claude-opus-4-8", 400_000, False) == (1_000_000, True)
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 400_000, False) == (1_000_000, True, False)
 
 
 def test_resolve_proc_unreadable_ignores_settings():
     # /proc unreadable (None): never fabricate certainty from global settings for an unseen env.
-    assert window.resolve(None, _S1M, "claude-opus-4-8", 50_000, True) == (200_000, False)
+    assert window.resolve(None, _S1M, "claude-opus-4-8", 50_000, True) == (200_000, False, False)
     # peak still proves it when high
-    assert window.resolve(None, _S1M, "claude-opus-4-8", 800_000, True) == (1_000_000, True)
+    assert window.resolve(None, _S1M, "claude-opus-4-8", 800_000, True) == (1_000_000, True, False)
 
 
 def test_resolve_proc_override_wins_over_settings():
     # a spawner [1m] in /proc is observed evidence -> certain 1M regardless of settings/trust
     proc = {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"}
-    assert window.resolve(proc, {}, "claude-opus-4-8", 10_000, False) == (1_000_000, True)
+    assert window.resolve(proc, {}, "claude-opus-4-8", 10_000, False) == (1_000_000, True, False)
 
 
 def test_resolve_no_evidence_anywhere_is_uncertain():
-    # observed env, no override, no settings default, no calibration -> unknown, flagged '?'.
+    # observed env, no override, no settings default, nothing declared -> unknown, flagged '?'.
     # This is the default install, and the case that used to render a confident (wrong) 200k.
-    assert window.resolve({}, {}, "claude-opus-4-8", 150_000, False) == (200_000, False)
+    assert window.resolve({}, {}, "claude-opus-4-8", 150_000, False) == (200_000, False, False)
 
 
 def test_resolve_settings_max_context_untrusted_uncertain():
     # a settings MAX_CONTEXT ceiling (>baseline) is provisional too -> value yes, certainty gated
     s = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000", "DISABLE_COMPACT": "1"}
-    assert window.resolve({}, s, "claude-opus-4-8", 10_000, False) == (500_000, False)
-    assert window.resolve({}, s, "claude-opus-4-8", 10_000, True) == (500_000, True)
+    assert window.resolve({}, s, "claude-opus-4-8", 10_000, False) == (500_000, False, False)
+    assert window.resolve({}, s, "claude-opus-4-8", 10_000, True) == (500_000, True, False)
 
 
 # --- mechanized derivation: a model launch must not require a code change ---
@@ -188,11 +188,43 @@ def test_model_env_key_predicate_excludes_siblings():
     assert not window.is_model_env_key("ANTHROPIC_API_KEY")
 
 
-def test_peak_promotes_to_smallest_observed_window():
-    # a 2M sighting on this host means a 1.4M peak promotes to 2M, not to a hard-coded 1M
-    class Cal:
-        sessions, families, options, one_m_seen = {}, {"OPUS": 2_000_000}, {}, True
-    assert window.resolve({}, {}, "claude-sonnet-5", 1_400_000, False, cal=Cal()) == (2_000_000, True)
+def test_peak_promotes_to_smallest_known_window():
+    # a 2M window declared for some model means a 1.4M peak promotes to 2M, not a hard-coded 1M
+    got = window.resolve({}, {}, "claude-sonnet-5", 1_400_000, False, known={200_000, 2_000_000})
+    assert got == (2_000_000, True, False)
+
+
+# --- declaration layer ---
+
+
+def test_declared_window_is_certain():
+    assert window.resolve({}, {}, "claude-opus-4-8", 10_000, False,
+                          declared=1_000_000) == (1_000_000, True, False)
+
+
+def test_undeclared_model_is_flagged_not_guessed():
+    assert window.resolve({}, {}, "claude-newthing-1", 10_000, False) == (200_000, False, False)
+
+
+def test_peak_above_declaration_promotes_and_conflicts():
+    # usage cannot exceed the real window: the declaration is provably stale, and must not be
+    # corrected in silence.
+    got = window.resolve({}, {}, "claude-opus-4-8", 400_000, False,
+                         declared=200_000, known={200_000, 1_000_000})
+    assert got == (1_000_000, True, True)
+
+
+def test_env_override_of_declaration_is_not_a_conflict():
+    # the kill switch is per-worker; a per-model declaration cannot know about it. Overriding is
+    # the override doing its job, not evidence that the map is wrong.
+    env = {"CLAUDE_CODE_DISABLE_1M_CONTEXT": "1"}
+    assert window.resolve(env, {}, "claude-opus-4-8", 0, False,
+                          declared=1_000_000) == (200_000, True, False)
+
+
+def test_declaration_outranks_settings_env_fallback():
+    assert window.resolve({}, _S1M, "claude-opus-4-8", 0, False,
+                          declared=200_000) == (200_000, True, False)
 
 
 def test_peak_beyond_every_known_window_is_flagged_not_guessed():

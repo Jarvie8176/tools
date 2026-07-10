@@ -80,35 +80,42 @@ def test_no_evidence_anywhere_is_uncertain(claude):
     assert (row["win"], row["win_certain"]) == (200_000, False)
 
 
-def test_headless_worker_window_from_sibling_statusline_sample(claude):
-    # The reported bug, end to end: an `sdk-cli` worker never renders a status line, its transcript
-    # model is bare `claude-opus-4-8`, and no ANTHROPIC_DEFAULT_* env exists. A TUI sibling's sample
-    # of the same family calibrates it to 1M.
-    claude.statusline("tui-session", win=1_000_000, model_id="claude-opus-4-8[1m]")
+def test_headless_worker_window_from_declaration(claude):
+    # The reported bug, end to end: an `sdk-cli` worker's transcript model is bare
+    # `claude-opus-4-8` and no ANTHROPIC_DEFAULT_* env exists. The declared map resolves it.
+    claude.windows({"claude-opus-4-8": 1_000_000})
     claude.registry(413, "headless", "/home/x/p", entrypoint="sdk-cli")
     claude.proc_alive(413, {})
     claude.transcript("headless", "/home/x/p", [assistant("claude-opus-4-8", inp=50_000)])
     row = collect.collect()["rows"][0]
-    assert (row["win"], row["win_certain"]) == (1_000_000, True)
+    assert (row["win"], row["win_certain"], row["win_conflict"]) == (1_000_000, True, False)
 
 
-def test_session_effort_falls_back_to_statusline_when_otel_absent(claude):
-    claude.statusline("u", win=1_000_000, model_id="claude-opus-4-8[1m]", effort="xhigh")
+def test_undeclared_model_row_is_flagged(claude):
     claude.registry(414, "u", "/home/x/p")
     claude.proc_alive(414, {})
-    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
-    assert collect.collect()["rows"][0]["session_effort"] == "xhigh"
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=50_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_conflict"]) == (200_000, False, False)
 
 
-def test_otel_effort_beats_statusline_sample(claude):
-    # OTel reflects the effort a request actually ran at; a statusLine sample can predate an
-    # in-session effort change.
-    claude.statusline("u", win=1_000_000, model_id="claude-opus-4-8[1m]", effort="low")
-    claude.otel({"u": {"effort": "xhigh"}})
+def test_stale_declaration_conflicts_when_usage_outgrows_it(claude):
+    claude.windows({"claude-opus-4-8": 200_000})
     claude.registry(415, "u", "/home/x/p")
     claude.proc_alive(415, {})
+    claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=400_000)])
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_conflict"]) == (1_000_000, True, True)
+
+
+def test_null_declaration_means_undecided_not_baseline(claude):
+    # a prefilled `null` must not read as "the operator said 200k"
+    claude.windows({"claude-opus-4-8": None})
+    claude.registry(416, "u", "/home/x/p")
+    claude.proc_alive(416, {})
     claude.transcript("u", "/home/x/p", [assistant("claude-opus-4-8", inp=10)])
-    assert collect.collect()["rows"][0]["session_effort"] == "xhigh"
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"]) == (200_000, False)
 
 
 def test_title_precedence_override_beats_custom(claude):

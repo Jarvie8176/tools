@@ -6,7 +6,7 @@ import os
 
 import pytest
 
-from cc_monitor import config, paths, statusline
+from cc_monitor import config, paths
 
 
 @pytest.fixture(autouse=True)
@@ -15,11 +15,9 @@ def _reset_config_state():
     a `--redact`/`--no-redact` CLI test would otherwise pin redaction on/off for later tests."""
     config._overrides = {}
     config._cache[0] = None
-    statusline._OPTIONS_CACHE.update(key=None, value={})
     yield
     config._overrides = {}
     config._cache[0] = None
-    statusline._OPTIONS_CACHE.update(key=None, value={})
 
 
 class FakeClaude:
@@ -36,7 +34,7 @@ class FakeClaude:
         self.titles_file = os.path.join(root, "titles.json")
         self.settings_file = os.path.join(root, "settings.json")
         self.otel_file = os.path.join(root, "cc-monitor-otel.json")
-        self.statusline_dir = os.path.join(root, "cc-monitor-statusline")
+        self.windows_file = os.path.join(root, "cc-monitor-windows.json")
         self.claude_json = os.path.join(root, "claude.json")
 
     def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
@@ -112,13 +110,10 @@ class FakeClaude:
         with open(self.otel_file, "w") as fh:
             json.dump(mapping, fh)
 
-    def statusline(self, session_id, win=None, model_id=None, effort=None, ts=1000.0):
-        """Write one statusLine sample, as install/statusline-capture.sh would."""
-        os.makedirs(self.statusline_dir, exist_ok=True)
-        rec = {"session_id": session_id, "win": win, "model_id": model_id,
-               "effort": effort, "ts": ts}
-        with open(os.path.join(self.statusline_dir, f"{session_id}.json"), "w") as fh:
-            json.dump(rec, fh)
+    def windows(self, mapping: dict):
+        """Write the declared model_id -> window map (`null` = declared-unknown)."""
+        with open(self.windows_file, "w") as fh:
+            json.dump(mapping, fh)
 
     def model_options(self, values):
         """Write ~/.claude.json's additionalModelOptionsCache (list of fully-qualified model ids)."""
@@ -140,10 +135,10 @@ def claude(tmp_path, monkeypatch):
     # Point at a fake (absent) OTel sidecar so per-session effort reads are hermetic — a test opts
     # in via fc.otel({...}); default is absent -> otel.read() None -> no s-effort column.
     monkeypatch.setattr(paths, "OTEL_FILE", fc.otel_file)
-    # Point at a fake (absent) statusLine sample dir + ~/.claude.json so window calibration is
-    # hermetic — a test opts in via fc.statusline(...) / fc.model_options(...). Default absent ->
-    # empty Calibration, so windows resolve from env+peak alone.
-    monkeypatch.setattr(paths, "STATUSLINE_DIR", fc.statusline_dir)
+    # Point at a fake (absent) windows map + ~/.claude.json so window resolution is hermetic — a
+    # test opts in via fc.windows(...) / fc.model_options(...). Default absent -> nothing declared,
+    # so windows resolve from env+peak alone and an undeclared model shows '?'.
+    monkeypatch.setattr(paths, "WINDOWS_FILE", fc.windows_file)
     monkeypatch.setattr(paths, "CLAUDE_JSON", fc.claude_json)
     return fc
 

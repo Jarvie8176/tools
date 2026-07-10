@@ -1,34 +1,32 @@
-"""Context-window (200k vs 1M) resolution.
+"""Context-window resolution — declared, bounded by observation, never guessed.
 
-The true window is NOT in the transcript — the JSONL model field is always e.g.
-``claude-opus-4-8``, never ``…[1m]`` — and it is NOT reliably in the worker's env either. Claude
-Code appends the ``[1m]`` suffix at RUNTIME from an account-level entitlement predicate; on a
-default install no ``ANTHROPIC_DEFAULT_<FAM>_MODEL`` exists at all, so an env-only reader sees a
-plain model id and concludes 200k for every session. Claude Code's own OTel ``api_request`` event
-strips the suffix too. The one local channel that carries the truth is the statusLine payload
-(``context_window.context_window_size`` plus a suffixed ``model.id``), captured per session by
-``install/statusline-capture.sh`` — see :mod:`cc_monitor.statusline`.
+The window is NOT recoverable from anything Claude Code writes on the render path. Its transcript
+``message.model`` is bare, its OTel ``api_request`` event strips the ``[<n>m]`` suffix, and a
+default install carries no ``ANTHROPIC_DEFAULT_*_MODEL`` env at all — the CLI appends the suffix at
+RUNTIME from an account-level entitlement predicate. Any rule inferred from those inputs is a rule
+that silently stops holding, which is exactly how every session came to render a confident 200k.
 
-Sources are layered, strongest evidence first, so no blind spot dominates:
+So resolution layers three things, strongest evidence first:
 
-  1. worker env      — per-worker overrides (a ``[1m]`` default, the 1M kill switch, an honoured
-                       ceiling). Exec-time evidence about the worker it was read from.
-  2. statusLine      — this session's own sample (exact ``session_id``): direct observation.
-  3. statusLine      — a same-family sample from ANY session. The entitlement predicate driving the
-                       ``[1m]`` suffix is account-global, and cc-monitor's boundary is one account
-                       on one host, so a sample generalises across sessions of that family. This is
-                       what covers ``sdk-cli`` workers, which never render a statusLine.
-  4. model options   — Claude Code's own ``additionalModelOptionsCache`` names fully-qualified ids
-                       for families beyond the built-ins. It supplies a VALUE freely; certainty only
-                       once a statusLine sample has proven the account really receives ``[1m]``.
-  5. settings.json   — the ``env`` block, applied internally and thus absent from ``/proc``. Value
-                       freely, certainty only for workers demonstrably started under it.
-  6. peak ctx        — a HARD LOWER BOUND: usage can never exceed the real window, so a peak above
-                       the resolved value proves 1M no matter what the other layers claimed.
+  1. worker env    — per-worker overrides: a ``[<n>m]`` default, the ``CLAUDE_CODE_DISABLE_1M_CONTEXT``
+                     kill switch, an honoured ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` ceiling. Exec-time
+                     evidence about the worker it was read from.
+  2. declaration   — the operator's ``model_id -> window`` map, prefilled from evidence by
+                     ``cc-monitor models --detect`` (see :mod:`cc_monitor.windows`).
+  3. peak ctx      — a HARD LOWER BOUND. Usage can never exceed the real window, so a peak above the
+                     resolved value proves it wrong: the window is promoted, and when the value it
+                     overrode was a declaration, the row is flagged as CONFLICTING so the operator
+                     sees that their map is stale rather than having it silently corrected.
 
-When nothing above decides, the window is genuinely unknown and ``certain`` is ``False`` ('?' in
-the UI). A bare ``claude-opus-4-8`` with a readable-but-empty env is exactly that case — it is NOT
-evidence of a 200k window, which is the bug this layering replaces.
+(The settings.json ``env`` block sits under the worker env as a fallback: Claude Code applies it
+internally so it never reaches ``/proc``, and a ``claude --resume`` worker's exec env lacks it.)
+
+Nothing decides -> ``certain`` is ``False`` and the UI shows '?'. A readable env with no model keys
+is absence of evidence, not evidence of a 200k window.
+
+Nothing here is enumerated: the family is derived from the model id and the window from the
+magnitude in the suffix, so a model launch needs no code change. A hard-coded family list is how
+Fable sessions were pinned to the baseline for as long as they were.
 """
 from __future__ import annotations
 
@@ -38,8 +36,8 @@ import re
 from . import paths
 
 # Shown (with '?') when nothing resolves the window — a placeholder for the percentage maths, never
-# an assertion. Every real value comes from Claude Code itself: a statusLine `context_window_size`,
-# or the `[<n>m]` suffix it appends to a model id.
+# an assertion. A real value comes from the operator's declaration, a `[<n>m]` suffix Claude Code
+# put in the env, or an observed peak; never from this constant.
 BASELINE = 200_000
 ONE_M = 1_000_000
 _TRUE = frozenset({"1", "true", "yes", "on"})
@@ -56,9 +54,8 @@ _FAMILY_RE = re.compile(r"claude[-_]([a-z0-9.\-]+)")
 _MODEL_KEY_RE = re.compile(r"^ANTHROPIC_DEFAULT_[A-Z0-9]+_MODEL$")
 _FLAG_KEYS = frozenset({
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-    # The 1M kill switch. Per-worker, so it is the one thing that can legitimately contradict the
-    # account-global statusLine generalisation (layer 3) — without reading it that inference would
-    # be unsound.
+    # The 1M kill switch. Per-worker, so it can legitimately contradict a per-model declaration:
+    # the declaration cannot know that one worker was launched with 1M disabled.
     "CLAUDE_CODE_DISABLE_1M_CONTEXT",
     # Gates whether CLAUDE_CODE_MAX_CONTEXT_TOKENS applies to a first-party model (see _ceiling).
     "DISABLE_COMPACT",
@@ -100,8 +97,8 @@ def family(model: str) -> str | None:
     """Model family derived from the id (``OPUS``, ``FABLE``, …), or None for a non-Claude model.
 
     Derived, not enumerated: a hard-coded list goes stale the day a family ships, which is exactly
-    how every Fable session came to be pinned to the baseline window. The family drives both the
-    ``ANTHROPIC_DEFAULT_<FAM>_MODEL`` lookup and the statusLine generalisation, so a miss here is a
+    how every Fable session came to be pinned to the baseline window. The family drives the
+    ``ANTHROPIC_DEFAULT_<FAM>_MODEL`` lookup and the model-options prefill, so a miss here is a
     silent wrong answer, not a visible error.
     """
     m = _FAMILY_RE.search((model or "").lower())
@@ -147,7 +144,7 @@ def _ceiling(env, model) -> int | None:
 
 
 def _from_env(env, model):
-    """``(window, certain, authoritative)`` from the env alone — no peak, no calibration.
+    """``(window, certain, authoritative)`` from the env alone — no peak, no declaration.
 
     ``authoritative`` marks an honoured explicit ceiling: it must NOT be raised by the peak lower
     bound, or a stale pre-throttle peak would clobber a deliberately lowered window.
@@ -165,7 +162,7 @@ def _from_env(env, model):
     return (sfx, True, False) if sfx else (BASELINE, False, False)
 
 
-def _apply_peak(win, certain, peak_ctx, known=()):
+def promote_to_clear_peak(win, certain, peak_ctx, known=()):
     """Raise ``win`` to clear an observed peak. Usage can never exceed the real window.
 
     Promotes to the smallest window this host has actually SEEN that clears the peak (Claude Code's
@@ -189,66 +186,34 @@ def resolve_window(env, model, peak_ctx):
     ``certain=False``.
     """
     win, certain, authoritative = _from_env(env, model)
-    return (win, certain) if authoritative else _apply_peak(win, certain, peak_ctx)
+    return (win, certain) if authoritative else promote_to_clear_peak(win, certain, peak_ctx)
 
 
-def _known_windows(cal):
-    """Every window value Claude Code has actually reported here — the peak-promotion candidates."""
-    if cal is None:
-        return ()
-    return {w for w in (*(cal.families or {}).values(), *(cal.options or {}).values()) if w}
+def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted, declared=None, known=()):
+    """Resolve one session's window. Returns ``(window, certain, conflict)``.
 
-
-def _from_calibration(cal, model, session_id):
-    """``(window, certain)`` from the statusLine calibration, or ``None`` if it cannot decide.
-
-    Layer 2 (this session's own sample) and layer 3 (a same-family sample from another session) are
-    both ``certain``: the value is Claude Code's own ``context_window_size`` and the entitlement
-    behind it is account-global. Layer 4 (the model-options cache) supplies a value but defers
-    certainty until some sample has proven the account actually receives the ``[1m]`` suffix.
-    """
-    if cal is None:
-        return None
-    rec = (cal.sessions or {}).get(session_id) if session_id else None
-    if rec and rec.get("win"):
-        return rec["win"], True
-    fam = family(model)
-    if fam is None:
-        return None
-    fam_win = (cal.families or {}).get(fam)
-    if fam_win:
-        return fam_win, True
-    opt_win = (cal.options or {}).get(fam)
-    if opt_win:
-        return opt_win, bool(cal.one_m_seen)
-    return None
-
-
-def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted, cal=None, session_id=None):
-    """Full window resolution across all layers. Returns ``(window, certain)``.
-
-    ``cal`` is the :class:`cc_monitor.statusline.Calibration` (``None`` when the statusLine capture
-    is not installed — the layering then degrades to env + peak, which on a default install cannot
-    distinguish 1M from 200k and so reports '?' rather than a confident wrong answer).
+    ``declared`` is the operator's window for this exact model id (``None`` = undeclared -> '?').
+    ``conflict`` is True only when a declaration was contradicted by observed usage: the value is
+    corrected upward, and the caller surfaces the disagreement rather than hiding it.
 
     Precedence rationale:
 
-    - A per-worker env override is exec-time evidence about THIS worker, and outranks any
-      account-level generalisation.
-    - ``proc_env is None`` (permission/hidepid/gone) means a possible override went unobserved, so
-      the settings block may not fabricate certainty for it. A statusLine sample keyed to that very
-      ``session_id`` is still direct observation of the session itself, and does apply.
-    - The peak lower bound is applied ONCE, at the end, against every window this host has seen.
+    - A per-worker env override is exec-time evidence about THIS worker and outranks the declaration,
+      which is per-model and cannot know that one worker was launched with the kill switch set.
+    - ``proc_env is None`` (permission / hidepid / gone) means a possible override went unobserved,
+      so the settings block may not fabricate certainty for it.
+    - The peak lower bound applies last, against ``known`` — every window the operator has declared
+      for any model — so a promotion lands on a real tier rather than a hard-coded 1M.
     """
     win, certain, authoritative = _from_env(proc_env, model)
     if authoritative:
-        return win, certain
+        return win, certain, False
+    used_declared = False
     if not certain:
-        hit = _from_calibration(cal, model, session_id)
-        if hit is not None:
-            win, certain = hit
+        if declared:
+            win, certain, used_declared = declared, True, True
         elif proc_env is not None and settings_env:
-            # The settings.json env block is applied internally and never reaches /proc. It grants a
+            # settings.json's env block is applied internally and never reaches /proc. It grants a
             # VALUE freely but certainty only with evidence: the worker demonstrably started under
             # the current settings, or usage already proves the larger window.
             s_win, _, s_auth = _from_env({**settings_env, **proc_env}, model)
@@ -256,5 +221,9 @@ def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted, cal=None,
                 proven = (peak_ctx or 0) > win
                 win, certain = s_win, bool(settings_trusted or proven)
                 if s_auth:
-                    return win, certain  # a settings ceiling is still a ceiling
-    return _apply_peak(win, certain, peak_ctx, known=_known_windows(cal))
+                    return win, certain, False  # a settings ceiling is still a ceiling
+
+    final, final_certain = promote_to_clear_peak(win, certain, peak_ctx, known=known)
+    # Only usage can contradict a declaration we actually used. A per-worker env override that
+    # supersedes the declaration is not a conflict — it is the override doing its job.
+    return final, final_certain, used_declared and final != declared

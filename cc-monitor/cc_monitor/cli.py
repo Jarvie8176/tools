@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from . import config
+from . import config, paths, windows
 from .collect import collect
 from .render import render_html, render_text
 from .server import serve
@@ -50,7 +50,44 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--otel-host", default="127.0.0.1")
     s.add_argument("--otel-port", type=int, default=4318)
     _add_redact_flag(s)
+
+    m = sub.add_parser("models", help="show / prefill the declared context window per model")
+    m.add_argument("--detect", action="store_true",
+                   help="prefill from evidence (observed peaks, Claude Code's own model options)")
+    m.add_argument("--write", action="store_true",
+                   help="with --detect, persist the prefill to the windows file")
     return p
+
+
+def _models(detect: bool, write: bool) -> int:
+    """Print the declared window per model; with --detect, prefill undeclared ones from evidence.
+
+    Prefill never overwrites a declaration: an existing entry is echoed back unchanged. A model with
+    no evidence is emitted as ``null`` — the operator decides, and until they do the dashboard shows
+    '?' rather than a guess.
+    """
+    current = windows.load()
+    mapping = windows.detect() if detect else dict(current)
+    if not mapping:
+        print("no models seen yet — run a session, then `cc-monitor models --detect`")
+        return 0
+    peaks = windows.observed_peaks() if detect else {}
+    for mid, win in sorted(mapping.items()):
+        if mid in current:
+            origin = "declared"
+        elif win:
+            origin = "detected"
+        else:
+            origin = "UNKNOWN — set this"
+        # The peak is the floor we have proven; showing it lets the operator sanity-check a value.
+        hint = f"   peak seen {peaks[mid]:,}" if mid in peaks else ""
+        print(f"  {mid:<32} {str(win) if win else 'null':>9}   {origin}{hint}")
+    if detect and write:
+        windows.save(mapping)
+        print(f"\nwrote {paths.WINDOWS_FILE}")
+    elif detect:
+        print("\n(dry run — re-run with --write to persist)")
+    return 0
 
 
 def main(argv=None) -> int:
@@ -65,6 +102,8 @@ def main(argv=None) -> int:
         with open(args.path, "w") as fh:
             fh.write(render_html(collect(), refresh=args.refresh))
         print(f"wrote {args.path}")
+    elif cmd == "models":
+        return _models(detect=args.detect, write=args.write)
     else:
         print(render_text(collect()))
     return 0

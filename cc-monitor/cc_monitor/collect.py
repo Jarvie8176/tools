@@ -12,7 +12,7 @@ import os
 import time
 
 from . import (
-    ccsession, config, otel, paths, settings, statusline, titles, transcript, window,
+    ccsession, config, otel, paths, settings, titles, transcript, window, windows,
 )
 
 # Parse cache keyed by path -> ((mtime, size), result). The result carries an internal `_offset`
@@ -133,10 +133,11 @@ def collect(now: float | None = None) -> dict:
     # so we only TRUST the fallback for workers that started at/after this mtime (window.resolve).
     settings_env = settings.model_env()
     settings_mtime = settings.file_mtime()
-    # statusLine samples -> the only local source of the true context window, plus this box's
-    # per-family calibration for the `sdk-cli` workers that never render a status line. Read once;
-    # joined per row. Absent (capture not installed) -> windows fall back to env+peak and flag '?'.
-    cal = statusline.calibrate()
+    # The operator's declared window per model id, prefilled by `cc-monitor models --detect`. Read
+    # once; joined per row by exact model id. An undeclared model resolves to '?' rather than to a
+    # guess. Its values double as the peak-promotion candidates (window.resolve).
+    declared = windows.load()
+    known_windows = set(declared.values())
     # Per-session OTel rollup (effort/cost/tokens keyed by session_id) — None when telemetry is off
     # or the sink never wrote. Read once; join per row. Absent -> per-session effort column stays
     # blank and the GLOBAL settings effortLevel header still shows (optional enrichment, like prom).
@@ -177,9 +178,10 @@ def collect(now: float | None = None) -> dict:
             settings_mtime is not None and started_at is not None
             and settings_mtime <= started_at / 1000
         )
-        win, win_certain = window.resolve(
+        win, win_certain, win_conflict = window.resolve(
             window.read_model_env(pid), settings_env, info.get("model"),
-            info.get("peak_ctx", 0), settings_trusted, cal=cal, session_id=sid,
+            info.get("peak_ctx", 0), settings_trusted,
+            declared=declared.get(info.get("model")), known=known_windows,
         )
         managed = sid[:8] in ledger  # a cc-session .url ledger hit — authoritative "managed" signal
         info.update({
@@ -195,16 +197,13 @@ def collect(now: float | None = None) -> dict:
             "status": "orphaned" if live == "orphaned"
             else _status(reg.get("status"), status_ts, info["mtime"], idle_s, gap),
             "idle_s": idle_s,
-            "win": win, "win_certain": win_certain,
+            "win": win, "win_certain": win_certain, "win_conflict": win_conflict,
             "override_title": titles.resolve(overrides, sid, bridge),
         })
-        # per-session effort, distinct from the global settings effortLevel header. Two sources,
-        # both exact-sid joins: the statusLine sample (TUI sessions) and the OTel sidecar (any
-        # session that emitted a request). OTel wins — it reflects the effort a request actually
-        # ran at, whereas a statusLine sample can predate an in-session effort change.
+        # per-session effort from the OTel sidecar (this session's own requests), distinct from the
+        # global settings effortLevel header. None when telemetry is off or this sid hasn't emitted.
         detail = otel_map.get(sid) if otel_map else None
-        eff = detail.get("effort") if isinstance(detail, dict) else None
-        info["session_effort"] = eff or statusline.effort_for(cal, sid)
+        info["session_effort"] = detail.get("effort") if isinstance(detail, dict) else None
         rows.append(info)
     rows.sort(key=lambda r: (r["status"] != "busy", -r.get("mtime", 0)))
     for dead in [p for p in _PARSE_CACHE if p not in seen_paths]:  # bound cache to live sessions

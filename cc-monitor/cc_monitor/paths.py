@@ -27,14 +27,15 @@ METRICS_FILE = os.path.expanduser(os.environ.get("CC_MONITOR_METRICS_FILE", ""))
 OTEL_FILE = os.path.expanduser(
     os.environ.get("CC_MONITOR_OTEL_FILE", os.path.join(CLAUDE_HOME, "cc-monitor-otel.json"))
 )
-# Per-session statusLine samples, one file per session_id (install/statusline-capture.sh writes
-# them). The ONLY local channel carrying the true context window — see statusline.py / window.py.
-STATUSLINE_DIR = os.path.expanduser(
-    os.environ.get("CC_MONITOR_STATUSLINE_DIR", os.path.join(CLAUDE_HOME, "cc-monitor-statusline"))
+# Declared context window per model id (`{"claude-opus-4-8": 1000000, ...}`), prefilled by
+# `cc-monitor models --detect` and then owned by the operator — see windows.py.
+WINDOWS_FILE = os.path.expanduser(
+    os.environ.get("CC_MONITOR_WINDOWS", os.path.join(CLAUDE_HOME, "cc-monitor-windows.json"))
 )
-# Claude Code's ~/.claude.json, read ONLY for `additionalModelOptionsCache` — its entries carry
-# fully-qualified model ids (e.g. a fable id bearing the `[1m]` suffix) for the families the CLI
-# offers beyond the built-ins. Never surfaced wholesale: the file also holds oauth account data.
+# Claude Code's ~/.claude.json, read ONLY by `models --detect` for `additionalModelOptionsCache` —
+# its entries carry fully-qualified model ids bearing the `[<n>m]` suffix for the families the CLI
+# offers beyond the built-ins. Never read on the render path; never surfaced wholesale (the file
+# also holds oauth account data).
 CLAUDE_JSON = os.path.expanduser(
     os.environ.get("CC_MONITOR_CLAUDE_JSON", os.path.join(CLAUDE_HOME, os.pardir, ".claude.json"))
 )
