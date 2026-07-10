@@ -64,6 +64,12 @@ ARGUMENTS
                     Default: cc-YYYYMMDD-<claude-version> (e.g.
                     cc-20260620-2-1-185). Dots in the version are
                     replaced with dashes for tmux compatibility.
+                    Because that default embeds the date AND the claude
+                    version, a bare \`cc-session\` does NOT re-attach a
+                    long-lived daemon started on another day or another
+                    version — it starts a NEW server-mode session, which
+                    evicts the existing one from the account's RC
+                    environment. Pass the name explicitly to re-attach.
 
 OPTIONS
     -w, --worktree NAME
@@ -418,9 +424,16 @@ TIPS
       prefix |  / -   split pane (custom binding)
       prefix n / p    next / previous window
 
-    The session's first pane runs claude directly (no shell). To get a
-    shell without killing claude, open a new window/pane as above, or
-    from outside: tmux new-window -t \$SESSION_NAME
+    The session's first pane runs the supervisor loop, with claude as
+    its child. To get a shell of your own without killing claude, open
+    a new window/pane as above, or from outside:
+      tmux new-window -t \$SESSION_NAME
+
+    NEVER press Ctrl-C in that first pane. The supervisor traps INT the
+    same way it traps TERM: it kills claude and exits 143, tearing down
+    the RC daemon. remain-on-exit keeps the dead pane (and the tmux
+    session) around, so the damage is easy to miss. Detach with
+    'prefix d'; stop a session on purpose with --kill.
 
     Re-attach later from any device:
       ssh mac

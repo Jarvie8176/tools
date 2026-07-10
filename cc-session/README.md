@@ -4,10 +4,17 @@ Persistent **tmux session** wrapper for [Claude Code](https://claude.ai/code) �
 keep `claude` running across SSH disconnects, sleeps, and devices (e.g. Mac
 desktop → phone over Tailscale).
 
-Re-running `cc-session` with the same session name re-attaches to the live
+Re-running `cc-session` with the **same session name** re-attaches to the live
 session instead of starting a new one, so your conversation survives the
 network blips that would otherwise drop the browser-side "Remote Control"
 bridge.
+
+> **The default session name is not stable across days or upgrades.** It is
+> `cc-YYYYMMDD-<claude-version>` (see [Usage](#usage)), so a bare `cc-session`
+> re-attaches only within the same day, on the same `claude` version. Otherwise
+> it starts a *new* server-mode session — which will evict an existing
+> server-mode RC daemon from the account's RC environment. To re-attach a
+> long-lived daemon, always pass its name explicitly (`cc-session claude`).
 
 When the browser bridge does drop ("Remote Control disconnected"), copy the
 `session_xxx` URL from the browser and run
@@ -89,8 +96,8 @@ After this one-time step, future upgrades are just `cc-session --update`.
 ## Usage
 
 ```bash
-cc-session                          # ~/cc, session 'claude'
-cc-session ~/work/api               # custom project, session 'claude'
+cc-session                          # ~/cc, session 'cc-YYYYMMDD-<claude-version>'
+cc-session ~/work/api               # custom project, same default session name
 cc-session ~/work/api api           # custom project, session 'api'
 cc-session -d ~/work/api api        # start 'api' detached, return to shell
 cc-session api                      # later: attach to 'api'
@@ -262,8 +269,8 @@ For the topology where a Tailscale-reachable VPS hosts the public
 
 ## Tips
 
-The first pane runs `claude` directly with no shell. To get a shell without
-killing claude:
+The first pane runs the supervisor (a shell loop), with `claude` as its child.
+To get a shell of your own without killing claude:
 
 | Inside tmux  | Action                                  |
 |--------------|-----------------------------------------|
@@ -274,6 +281,12 @@ killing claude:
 | `prefix [`   | scroll mode (`q` to exit)               |
 
 Or from outside: `tmux new-window -t <SESSION_NAME>`.
+
+> **Never press Ctrl-C in the first pane.** The supervisor traps `INT` the same
+> way it traps `TERM`: it kills `claude` and exits 143, tearing down the RC
+> daemon. Because the pane is held open by `remain-on-exit`, the tmux session
+> survives and the damage is easy to miss. Use `prefix d` to leave, and
+> `cc-session --kill <NAME>` to stop a session on purpose.
 
 ## Use case: reclaim an orphaned cloud session
 
