@@ -20,17 +20,15 @@ RestartSec=5
 MemoryHigh=128M
 MemoryMax=256M
 Nice=10
-# Sandboxing (defence-in-depth for a network-listening service). ProtectHome is intentionally
-# omitted: the config file lives under $HOME/.config; ProtectSystem=strict still makes /usr,/boot,
-# /etc read-only while leaving $HOME writable.
+# Sandboxing (defence-in-depth for a network-listening service). This is a systemd --user unit, so
+# it is limited to directives the unprivileged user manager can apply: the capability/kernel-
+# manipulating ones (ProtectKernelModules/Tunables, ProtectControlGroups, RestrictNamespaces,
+# LockPersonality) fail a --user start with 218/CAPABILITIES ("Failed to drop capabilities") and are
+# deliberately omitted. ProtectHome is also omitted so the config file under $HOME/.config stays
+# writable; ProtectSystem=strict still makes /usr,/boot,/etc read-only.
 NoNewPrivileges=true
 ProtectSystem=strict
 PrivateTmp=true
-ProtectControlGroups=true
-ProtectKernelTunables=true
-ProtectKernelModules=true
-RestrictNamespaces=true
-LockPersonality=true
 RestrictAddressFamilies=AF_INET AF_INET6
 
 [Install]
