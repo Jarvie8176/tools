@@ -43,6 +43,8 @@ In scope:
 
 - Code in `backup-verification/` and `rclone-migrate/` (Python source,
   bundled hash profiles, CLI behaviour)
+- Code in `llm-pipeline-monitor/` (the localhost dashboard's HTTP server,
+  SSE, config plane, and Prometheus adapter)
 - CI / build configuration in `.github/`
 - The `pyproject.toml` files and `ruff.toml` if they affect build or
   test integrity

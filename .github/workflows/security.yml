@@ -73,7 +73,7 @@ jobs:
         # `-x` excludes test code (pytest-style asserts trip B101).
         # Continue on findings — SARIF upload surfaces them in the Security tab.
         run: |
-          bandit -r backup-verification rclone-migrate \
+          bandit -r backup-verification rclone-migrate llm-pipeline-monitor \
             -x '*/tests/*,*/test_*.py' \
             --severity-level medium --confidence-level medium \
             -f sarif -o bandit.sarif || true

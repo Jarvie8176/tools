@@ -1,0 +1,18 @@
+# Local deploy gate — instance-specific (PORT/HOST + the upstream Prometheus URL). Never commit;
+# install/.env.example is the tracked template.
+install/.env
+
+# Python build/cache
+__pycache__/
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.coverage
+coverage.xml
+junit.xml
+
+# Web UI build deps + intermediate (the committed artifact is llm_pipeline_monitor/webui_page.html)
+webui-src/node_modules/
+webui-src/dist/

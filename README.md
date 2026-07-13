@@ -35,6 +35,7 @@ Both tools share a common ethos:
 | **rclone-migrate** | Safer alternative to `rclone move`: split into `copy → check → delete`, content-addressed matching, persisted hash manifests, audit log, and a check-signature gate that refuses delete if src changed mid-flight. | [`rclone-migrate/`](rclone-migrate/) |
 | **cc-session** | Persistent tmux wrapper for [Claude Code](https://claude.ai/code) — keeps `claude` running across SSH disconnects, sleeps, and devices, so the browser-side "Remote Control" bridge can drop without losing the conversation. | [`cc-session/`](cc-session/) |
 | **cc-monitor** | Standalone live dashboard for [Claude Code](https://claude.ai/code) sessions on a host — per-session model, token usage, context window, and running status, read from local `~/.claude` sources (no cc-session dependency). Requires Python 3.14. | [`cc-monitor/`](cc-monitor/) |
+| **llm-pipeline-monitor** | Live dashboard for a local LLM inference pipeline — per-endpoint resident model (served gguf), throughput (tok/s), host GPU/VRAM, per-session context, and model-swap events. A Prometheus *consumer* (queries `llm_endpoint_*`), sibling to cc-monitor's shell. Requires Python 3.14. | [`llm-pipeline-monitor/`](llm-pipeline-monitor/) |
 
 Each sub-project has its own `README.md` with a full reference; this
 top-level README is the umbrella entry point.
