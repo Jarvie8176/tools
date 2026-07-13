@@ -175,6 +175,9 @@ def serve(port: int, host: str = "127.0.0.1", refresh: int = 3) -> None:
         broker.start()
     except Exception:
         log.exception("llm-pipeline-monitor initial warm failed")
+    if host in ("0.0.0.0", "::", ""):  # noqa: S104 — warn, don't silently expose a no-auth dashboard
+        print(f"WARNING: binding {host!r} exposes this NO-AUTH dashboard on every interface; "
+              "bind 127.0.0.1 or a trusted tailnet IP behind an edge proxy instead.")
     httpd = _Server((host, port), _handler(broker))
     print(f"llm-pipeline-monitor serving on http://{host}:{port}  (Ctrl-C to stop)")
     httpd.serve_forever()

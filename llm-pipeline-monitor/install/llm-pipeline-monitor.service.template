@@ -20,6 +20,18 @@ RestartSec=5
 MemoryHigh=128M
 MemoryMax=256M
 Nice=10
+# Sandboxing (defence-in-depth for a network-listening service). ProtectHome is intentionally
+# omitted: the config file lives under $HOME/.config; ProtectSystem=strict still makes /usr,/boot,
+# /etc read-only while leaving $HOME writable.
+NoNewPrivileges=true
+ProtectSystem=strict
+PrivateTmp=true
+ProtectControlGroups=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+RestrictNamespaces=true
+LockPersonality=true
+RestrictAddressFamilies=AF_INET AF_INET6
 
 [Install]
 WantedBy=default.target

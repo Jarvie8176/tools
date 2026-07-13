@@ -69,9 +69,6 @@
           dec={() => saveCfg({ vram_warn_pct: Math.max(0, cfg.vram_warn_pct - 5) })}
           inc={() => saveCfg({ vram_warn_pct: Math.min(100, cfg.vram_warn_pct + 5) })} />
       </div>
-      {#if feed.prom_url}
-        <div class="mt-3 truncate font-mono text-[10px] text-t4">upstream: {feed.prom_url}</div>
-      {/if}
     </div>
   {/if}
 </div>

@@ -3,7 +3,7 @@
 // free-text user content — so there is nothing to redact client-side.
 
 export const feed = $state({
-  rows: [], ok: false, error: null, prom_url: '', connected: false
+  rows: [], ok: false, error: null, connected: false
 });
 
 export function connectFeed() {
@@ -16,7 +16,6 @@ export function connectFeed() {
       feed.rows = d.rows || [];
       feed.ok = !!d.ok;
       feed.error = d.error ?? null;
-      feed.prom_url = d.prom_url || '';
     } catch { /* ignore malformed frame */ }
   };
   es.onerror = () => (feed.connected = false); // EventSource auto-reconnects
@@ -35,13 +34,32 @@ export async function loadCfg() {
   } catch { /* keep defaults */ }
 }
 
-export async function saveCfg(partial) {
-  Object.assign(cfg, partial); // optimistic
+// Debounced persist: a slider drag fires oninput per pixel. Update the UI optimistically at once,
+// but collapse the POST storm into a single trailing write — otherwise many concurrent POSTs return
+// out of order and a stale reply bounces the thumb backward.
+let _pending = {};
+let _timer = null;
+
+export function saveCfg(partial) {
+  Object.assign(cfg, partial);      // optimistic — immediate, responsive
+  Object.assign(_pending, partial); // accumulate for the trailing flush
+  clearTimeout(_timer);
+  _timer = setTimeout(_flush, 250);
+}
+
+async function _flush() {
+  const body = _pending;
+  _pending = {};
   try {
     const r = await fetch('/api/config', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(partial)
+      body: JSON.stringify(body)
     });
-    Object.assign(cfg, await r.json()); // reconcile with server-clamped values
+    const server = await r.json();
+    // reconcile with server-clamped values, but never clobber a key the user is still editing
+    // (accumulated into _pending while this request was in flight).
+    for (const [k, v] of Object.entries(server)) {
+      if (!(k in _pending)) cfg[k] = v;
+    }
   } catch { /* leave optimistic value */ }
 }

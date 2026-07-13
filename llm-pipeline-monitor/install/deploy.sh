@@ -25,6 +25,12 @@ if [[ -z "$PROM_URL" ]]; then
   echo "llm-pipeline-monitor: LLM_PM_PROM_URL unset in $env_file — set the upstream Prometheus URL." >&2
   exit 1
 fi
+# Must be a clean http(s) URL: reject whitespace and the sed metacharacters (# & \) that would
+# otherwise silently corrupt the unit rendering below into a malformed Environment= line.
+if [[ ! "$PROM_URL" =~ ^https?://[^[:space:]#\&\\]+$ ]]; then
+  echo "llm-pipeline-monitor: LLM_PM_PROM_URL must be http(s):// with no whitespace or # & \\ chars." >&2
+  exit 1
+fi
 
 # --- install/update the package (user site) ---
 echo "llm-pipeline-monitor: installing package from $pkg_dir"

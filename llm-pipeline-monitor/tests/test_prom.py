@@ -78,6 +78,64 @@ def test_upstream_failure_is_soft(monkeypatch):
     assert "connection refused" in d["error"]
 
 
+def test_non_finite_values_sanitized(monkeypatch):
+    # Prometheus emits "NaN"/"+Inf"/"-Inf"; they must become None (not crash int(), not emit
+    # invalid JSON). Cover both an int-typed field (would crash int()) and float-typed fields.
+    h = {"host": "node-a"}
+    series = [
+        sample("llm_endpoint_up", 1, **h),
+        sample("llm_endpoint_ctx_used_tokens", "NaN", **h),        # int field
+        sample("llm_endpoint_ctx_effective_tokens", "+Inf", **h),  # int field
+        sample("llm_endpoint_tokens_per_second", "NaN", phase="generation", **h),  # float field
+        sample("llm_host_gpu_utilization_ratio", "-Inf", **h),
+    ]
+    monkeypatch.setattr(prom, "_query", lambda *a, **k: series)
+    d = prom.collect()  # must not raise
+    assert d["ok"] is True
+    r = d["rows"][0]
+    assert r["ctx_used"] is None and r["ctx_effective"] is None
+    assert r["tok_s_gen"] is None and r["gpu_util"] is None
+    # and the serialized payload is spec-valid JSON (no NaN/Infinity tokens)
+    from llm_pipeline_monitor.stream import serialize
+    import json
+    body = serialize(d).decode()
+    assert "NaN" not in body and "Infinity" not in body
+    json.loads(body)  # strict parse succeeds
+
+
+def test_resident_model_latest_timestamp_wins(monkeypatch):
+    # After a swap the OLD resident_model series is still returned within lookback-delta with
+    # value 1; the row must show the LATEST-timestamp sample, not an order-dependent stale one.
+    def rm(served, ts):
+        return {"metric": {"__name__": "llm_endpoint_resident_model", "host": "node-a",
+                            "served_id": served, "model_key": served.split("/")[-1]},
+                "value": [ts, "1"]}
+    for order in ([rm("/models/old.gguf", 100), rm("/models/new.gguf", 200)],
+                  [rm("/models/new.gguf", 200), rm("/models/old.gguf", 100)]):
+        monkeypatch.setattr(prom, "_query", lambda *a, _o=order, **k: _o)
+        r = prom.collect()["rows"][0]
+        assert r["served_id"] == "/models/new.gguf", f"stale gguf won for order {order}"
+
+
+def test_scheme_rejected(monkeypatch):
+    monkeypatch.setattr("llm_pipeline_monitor.paths.PROM_URL", "file:///etc/passwd")
+    called = []
+    monkeypatch.setattr(prom, "_query", lambda *a, **k: called.append(1) or [])
+    d = prom.collect()
+    assert d["ok"] is False and not called  # never touched _query for a non-http scheme
+
+
+def test_ctx_pct_clamped(monkeypatch):
+    h = {"host": "node-a"}
+    series = [
+        sample("llm_endpoint_up", 1, **h),
+        sample("llm_endpoint_ctx_used_tokens_peak", 99999, **h),   # peak > effective
+        sample("llm_endpoint_ctx_effective_tokens", 1000, **h),
+    ]
+    monkeypatch.setattr(prom, "_query", lambda *a, **k: series)
+    assert prom.collect()["rows"][0]["ctx_pct"] == 100.0  # clamped, not 9999.9
+
+
 def test_query_rejects_non_success(monkeypatch):
     class FakeResp:
         def __enter__(self): return self

@@ -27,16 +27,20 @@
   const down = $derived(!r.up);
   const model = $derived(basename(r.served_id) || r.model_key || '—');
   const status = $derived(down ? 'orphaned' : r.active ? 'busy' : 'ready');
+  // Label mirrors what the pct measures (peak, per D-OBS-4), so "16000 / 32768" sits next to the
+  // peak %, not a mismatched instantaneous value. null pct passes through → CtxBar renders "?".
+  const ctxUsed = $derived(r.ctx_peak ?? r.ctx_used);
   const ctxVM = $derived({
-    ctxLabel: r.ctx_effective ? `${r.ctx_used ?? '?'} / ${r.ctx_effective}` : '—',
-    level: level(r.ctx_pct), pct: r.ctx_pct ?? 0
+    ctxLabel: r.ctx_effective ? `${ctxUsed ?? '?'} / ${r.ctx_effective}` : '—',
+    level: level(r.ctx_pct), pct: r.ctx_pct
   });
   const vramVM = $derived({
     ctxLabel: r.vram_total ? `${gb(r.vram_used)} / ${gb(r.vram_total)}` : '—',
-    level: vlevel(r.vram_pct), pct: r.vram_pct ?? 0
+    level: vlevel(r.vram_pct), pct: r.vram_pct
   });
-  // G3: generation throughput below the floor = GPU dropped offload → flag red.
-  const tpsLow = $derived(r.tok_s_gen != null && r.tok_s_gen < cfg.tps_floor);
+  // G3: generation throughput below the floor = GPU dropped offload. Only meaningful while there
+  // IS generation — an idle endpoint reporting 0 must not light the alarm (require tok_s_gen > 0).
+  const tpsLow = $derived(r.tok_s_gen != null && r.tok_s_gen > 0 && r.tok_s_gen < cfg.tps_floor);
 </script>
 
 <div class="rounded-xl border border-bd2 bg-card p-3.5 shadow-[var(--sh)] {down ? 'opacity-60' : ''}">

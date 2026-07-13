@@ -20,11 +20,15 @@ log = logging.getLogger("llm-pipeline-monitor")
 
 
 def serialize(d: dict) -> bytes:
-    """Project a prom.collect() result to the stable, compact API payload."""
+    """Project a prom.collect() result to the stable, compact API payload.
+
+    ``prom_url`` is deliberately NOT on the wire: the UI needs only ok/error for the "upstream
+    unreachable" banner, and the no-auth endpoint shouldn't disclose the internal upstream host.
+    ``allow_nan=False`` guarantees spec-valid JSON — a stray non-finite would otherwise emit
+    ``NaN``/``Infinity`` and break the client's JSON.parse (belt to prom._fval's suspenders)."""
     return json.dumps(
-        {"rows": d.get("rows", []), "ok": d.get("ok", False),
-         "error": d.get("error"), "prom_url": d.get("prom_url", "")},
-        separators=(",", ":"),
+        {"rows": d.get("rows", []), "ok": d.get("ok", False), "error": d.get("error")},
+        separators=(",", ":"), allow_nan=False,
     ).encode()
 
 
