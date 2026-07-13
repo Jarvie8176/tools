@@ -29,7 +29,9 @@ _ALL = '{__name__=~"llm_(endpoint|host)_.*"}'
 def _query(base: str, promql: str, timeout: float):
     """Run a Prometheus instant query; return the result[] list. Raises on transport/HTTP/JSON error."""
     url = base + "/api/v1/query?" + urlparse.urlencode({"query": promql})
-    with urlrequest.urlopen(url, timeout=timeout) as resp:
+    # collect() rejects any non-http(s) PROM_URL before calling here, so urlopen can't be steered
+    # to a file:// read; the base is an operator-set config value, not request input.
+    with urlrequest.urlopen(url, timeout=timeout) as resp:  # nosec B310
         body = json.loads(resp.read().decode("utf-8", "replace"))
     if body.get("status") != "success":
         raise ValueError("prometheus status=%s" % body.get("status"))
@@ -142,7 +144,9 @@ def collect() -> dict:
     for r in hosts.values():
         used = r["ctx_peak"] if r["ctx_peak"] is not None else r["ctx_used"]
         r["ctx_pct"] = _pct(used, r["ctx_effective"])
-        r["vram_pct"] = _pct(r["vram_used"] or 0, r["vram_total"])
+        # pass vram_used straight (NOT `or 0`): a MISSING used with a present total must stay None
+        # (→ "?"), not masquerade as a healthy 0%. A real 0 still yields 0% (0 is not None).
+        r["vram_pct"] = _pct(r["vram_used"], r["vram_total"])
         r["swap_total"] = int(r["swap_total"])
 
     rows = sorted(hosts.values(), key=lambda r: r["host"])

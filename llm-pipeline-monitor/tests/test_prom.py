@@ -136,6 +136,23 @@ def test_ctx_pct_clamped(monkeypatch):
     assert prom.collect()["rows"][0]["ctx_pct"] == 100.0  # clamped, not 9999.9
 
 
+def test_vram_missing_used_is_not_faked_zero(monkeypatch):
+    # vram_total present but vram_used absent must stay None (→ "?"), not masquerade as 0%.
+    h = {"host": "node-a"}
+    monkeypatch.setattr(prom, "_query", lambda *a, **k: [
+        sample("llm_endpoint_up", 1, **h),
+        sample("llm_host_gpu_vram_total_bytes", 24_000_000_000, **h),
+    ])
+    assert prom.collect()["rows"][0]["vram_pct"] is None
+    # but a real 0 used yields a genuine 0.0%
+    monkeypatch.setattr(prom, "_query", lambda *a, **k: [
+        sample("llm_endpoint_up", 1, **h),
+        sample("llm_host_gpu_vram_used_bytes", 0, **h),
+        sample("llm_host_gpu_vram_total_bytes", 24_000_000_000, **h),
+    ])
+    assert prom.collect()["rows"][0]["vram_pct"] == 0.0
+
+
 def test_query_rejects_non_success(monkeypatch):
     class FakeResp:
         def __enter__(self): return self
