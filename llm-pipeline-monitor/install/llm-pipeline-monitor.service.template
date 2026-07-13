@@ -1,0 +1,25 @@
+# systemd --user unit for llm-pipeline-monitor (rendered by install/deploy.sh).
+# Localhost-only dashboard; lightweight (stdlib http). Queries an upstream Prometheus over HTTP —
+# read-only, no local fleet access. Resource-bounded to respect co-tenancy with other services.
+[Unit]
+Description=llm-pipeline-monitor — local LLM inference pipeline dashboard
+After=network.target
+# Stop a crash-loop from hammering the co-tenant host: >5 restarts in 60s -> give up.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Upstream Prometheus HTTP API base (site-specific; from install/.env, never committed).
+Environment=LLM_PM_PROM_URL=__PROM_URL__
+ExecStart=__BIN__ serve --host __HOST__ --port __PORT__ --refresh __REFRESH__
+Restart=on-failure
+RestartSec=5
+# co-tenancy guardrails. The process is tiny (stdlib http + periodic HTTP query); soft reclaim
+# with a generous hard backstop, and Nice yields to co-tenants. No CPUQuota (steady-state work ~0).
+MemoryHigh=128M
+MemoryMax=256M
+Nice=10
+
+[Install]
+WantedBy=default.target

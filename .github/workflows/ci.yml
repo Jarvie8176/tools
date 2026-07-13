@@ -24,6 +24,7 @@ jobs:
       rclone-migrate: ${{ steps.filter.outputs.rclone-migrate }}
       cc-session: ${{ steps.filter.outputs.cc-session }}
       cc-monitor: ${{ steps.filter.outputs.cc-monitor }}
+      llm-pipeline-monitor: ${{ steps.filter.outputs.llm-pipeline-monitor }}
       workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@v4
@@ -44,6 +45,9 @@ jobs:
               - '.github/workflows/ci.yml'
             cc-monitor:
               - 'cc-monitor/**'
+              - '.github/workflows/ci.yml'
+            llm-pipeline-monitor:
+              - 'llm-pipeline-monitor/**'
               - '.github/workflows/ci.yml'
             workflows:
               - '.github/**'
@@ -213,6 +217,62 @@ jobs:
           path: cc-monitor/coverage.xml
           retention-days: 14
 
+  llm-pipeline-monitor:
+    name: llm-pipeline-monitor (py${{ matrix.python }})
+    needs: changes
+    if: needs.changes.outputs.llm-pipeline-monitor == 'true' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux-only; tracks Python 3.14 (same as cc-monitor).
+        python: ['3.14']
+    defaults:
+      run:
+        working-directory: llm-pipeline-monitor
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: llm-pipeline-monitor/webui-src/package-lock.json
+      - name: Web UI — type-check + build + verify committed artifact is fresh
+        working-directory: llm-pipeline-monitor/webui-src
+        # The dashboard is a Svelte/Vite app built to a single committed webui_page.html (served by
+        # the stdlib server, no build at deploy time). Rebuild here and fail if the committed
+        # artifact drifts from source — a stale build would pass the Python tests silently.
+        run: |
+          npm ci
+          npm run check
+          npm run build
+          git diff --exit-code ../llm_pipeline_monitor/webui_page.html \
+            || { echo "::error::llm_pipeline_monitor/webui_page.html is stale — run 'npm run build' in webui-src and commit the result"; exit 1; }
+      - name: Install
+        run: pip install -e ".[dev]" pytest-cov
+      - name: Test with coverage
+        run: |
+          pytest -v \
+            --cov=llm_pipeline_monitor \
+            --cov-branch \
+            --cov-report=term-missing:skip-covered \
+            --cov-report=xml:coverage.xml \
+            --junitxml=junit.xml
+      - name: Upload coverage artifact
+        if: always() && matrix.python == '3.14'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-llm-pipeline-monitor
+          path: llm-pipeline-monitor/coverage.xml
+          retention-days: 14
+
   cc-session:
     name: cc-session (bats / ${{ matrix.os }})
     needs: changes
@@ -283,7 +343,7 @@ jobs:
   ci-pass:
     name: CI pass
     if: always()
-    needs: [lint, backup-verification, rclone-migrate, cc-session, cc-monitor]
+    needs: [lint, backup-verification, rclone-migrate, cc-session, cc-monitor, llm-pipeline-monitor]
     runs-on: ubuntu-latest
     steps:
       - name: Verify required jobs succeeded or were skipped
