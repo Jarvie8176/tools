@@ -2,7 +2,7 @@
 // SESSIONS/RECON (see README §接入真实数据). Redaction is server-side — the client only renders
 // what the payload carries ("[redacted]" for masked free text); reveal flips the server behaviour.
 export const feed = $state({
-  sessions: [], recon: null, prom: {}, cc_session: false, effort: null, connected: false
+  sessions: [], recon: null, prom: {}, cc_session: false, effort: null, models: [], connected: false
 });
 
 export function connectFeed() {
@@ -17,6 +17,7 @@ export function connectFeed() {
       feed.prom = d.prom || {};
       feed.cc_session = !!d.cc_session;
       feed.effort = d.effort ?? null;
+      feed.models = d.models || [];
     } catch { /* ignore malformed frame */ }
   };
   es.onerror = () => (feed.connected = false); // EventSource auto-reconnects

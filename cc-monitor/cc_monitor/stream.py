@@ -33,8 +33,8 @@ _REDACT_FIELDS = ("custom_title", "override_title", "initial_prompt", "last_prom
 # client can tick idle locally without a server push; `idle_s`/`ts` are deliberately excluded
 # from the payload so a mere clock advance is not a "change".
 _API_FIELDS = (
-    "session_id", "u8", "pid", "name", "model", "status",
-    "ctx", "peak_ctx", "win", "win_certain",
+    "session_id", "u8", "pid", "name", "model", "model_alias", "status",
+    "ctx", "peak_ctx", "win", "win_certain", "win_source",
     "cum_input", "cum_output", "cum_cache", "full",
     "bridge_id", "bridge_short", "custom_title", "override_title",
     "initial_prompt", "last_prompt", "session_effort",
@@ -58,7 +58,7 @@ def serialize(d: dict) -> bytes:
         sessions.append(s)
     return json.dumps(
         {"sessions": sessions, "prom": d["prom"], "cc_session": d.get("cc_session", False),
-         "effort": d.get("effort"), "recon": d.get("recon", {})},
+         "effort": d.get("effort"), "recon": d.get("recon", {}), "models": d.get("models", [])},
         separators=(",", ":"),
     ).encode()
 

@@ -1,13 +1,32 @@
 <script>
   import {
-    prefs, ui, eff, toggleCol, setReveal,
+    prefs, ui, eff, toggleCol, setReveal, postModel,
     closeSettings, saveSettings, discardSettings, keepEditing, resetSettings, settingsDirty
   } from './state.svelte.js';
+  import { feed } from './data.svelte.js';
+  import { fmtK } from './fmt.js';
   import Stepper from './Stepper.svelte';
   import DualRange from './DualRange.svelte';
 
   const dirty = $derived(settingsDirty());
   const densityLabel = $derived({ patrol: '巡检', standard: '标准', debug: '排查' }[prefs.density]);
+
+  // window 来源标签（手动 override / 实测证据 / 探测候选 / 未知死角）——纯展示
+  const SRC = {
+    manual:    { label: '手动',  cls: 'text-info' },
+    evidence:  { label: '实测',  cls: 'text-ok' },
+    candidate: { label: '候选',  cls: 'text-warn' },
+    unknown:   { label: '?',     cls: 'text-t4' }
+  };
+  // 每-model 服务端配置：即时 POST，SSE 回流刷新（不进本机 prefs 快照）。空 window = 清除 override。
+  function commitWindow(model, raw) {
+    const s = (raw || '').trim();
+    if (s === '') { postModel(model, { window: null }); return; }   // 清除 → 回落证据链
+    const n = Math.round(Number(s));
+    if (Number.isFinite(n) && n > 0) postModel(model, { window: n });
+  }
+  function commitAlias(model, raw) { postModel(model, { alias: (raw || '').trim() }); }
+  const onEnter = (fn) => (e) => { if (e.key === 'Enter') { e.preventDefault(); fn(e); e.currentTarget.blur(); } };
 
   const LEGEND = [
     { icon: 'busy', term: 'busy', cls: 'text-ok', desc: '生成中，正在产出' },
@@ -135,6 +154,59 @@
         />
       </div>
     </div>
+
+    <!-- 模型 / 窗口容量（per-model 服务端配置：alias + 手动 override + 探测候选采纳） -->
+    <div class="mb-2 mt-[18px] flex items-baseline gap-2">
+      <span class="font-mono text-[10.5px] font-semibold tracking-[.08em] text-t4">模型 / 窗口容量</span>
+      <span class="text-[10.5px] text-t4">手动 override 覆盖自动探测 · 空=回落实测</span>
+    </div>
+    {#if feed.models.length === 0}
+      <div class="rounded-[10px] border border-bd2 bg-chip px-3.5 py-3 text-[11px] text-t4">当前无在册会话可归类模型</div>
+    {:else}
+      <div class="rounded-[10px] border border-bd2 bg-chip">
+        {#each feed.models as m, i (m.model)}
+          <div class="px-3.5 py-3 {i > 0 ? 'border-t border-bd2' : ''}">
+            <div class="flex items-baseline gap-2">
+              <span class="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-t1">{m.alias || m.model}</span>
+              <span class="shrink-0 text-[11px] tabular-nums {(SRC[m.win_source] || SRC.unknown).cls}">
+                {fmtK(m.win || 0)} · {(SRC[m.win_source] || SRC.unknown).label}
+              </span>
+            </div>
+            {#if m.alias}<div class="mt-0.5 font-mono text-[10px] text-t4">{m.model}</div>{/if}
+            <div class="mt-0.5 text-[10px] text-t4">{m.sessions} 个在册会话</div>
+
+            <div class="mt-2 flex gap-2">
+              <input
+                class="min-w-0 flex-1 rounded-[7px] border border-bd2 bg-well px-2.5 py-1.5 text-[11.5px] text-t1 outline-none focus:border-info"
+                placeholder="别名（可选）"
+                value={m.alias || ''}
+                onkeydown={onEnter((e) => commitAlias(m.model, e.currentTarget.value))}
+                onblur={(e) => commitAlias(m.model, e.currentTarget.value)}
+              />
+              <input
+                class="w-[120px] shrink-0 rounded-[7px] border border-bd2 bg-well px-2.5 py-1.5 text-[11.5px] tabular-nums text-t1 outline-none focus:border-info"
+                inputmode="numeric"
+                placeholder="窗口 override"
+                value={m.override ?? ''}
+                onkeydown={onEnter((e) => commitWindow(m.model, e.currentTarget.value))}
+                onblur={(e) => commitWindow(m.model, e.currentTarget.value)}
+              />
+            </div>
+
+            {#if m.candidate && !m.override}
+              <div class="mt-2 flex items-center gap-2 rounded-[7px] border border-warn bg-warnbg px-2.5 py-1.5">
+                <span class="flex-1 text-[10.5px] leading-[1.5] text-t3">探测到窗口 <span class="font-medium tabular-nums text-t1">{fmtK(m.candidate)}</span>{m.win_source === 'candidate' ? '（已用于填补 ? 死角）' : ''}</span>
+                <button
+                  class="shrink-0 cursor-pointer rounded-[6px] bg-info px-2.5 py-1 text-[11px] font-medium text-panel"
+                  onclick={() => postModel(m.model, { window: m.candidate })}
+                >采纳</button>
+              </div>
+            {/if}
+          </div>
+        {/each}
+      </div>
+      <div class="mx-0.5 mt-[7px] text-[10.5px] leading-[1.7] text-t4">改动即时生效（服务端持久化，非本机偏好）· 「采纳」= 把探测值提升为手动 override</div>
+    {/if}
 
     <!-- 图例 -->
     <div class="mb-2 mt-[18px] font-mono text-[10.5px] font-semibold tracking-[.08em] text-t4">图例</div>

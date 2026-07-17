@@ -55,6 +55,9 @@ function postJSON(url, body) {
   return fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 }
 export function postTitle(id, title) { postJSON('/api/titles', { key: id, title }).catch(() => {}); }
+// 每-model 服务端配置（alias / window override）——即时 POST，服务端持久化，下一次 collect 经 SSE 回流。
+// 不进 localStorage / saveSettings 快照（那批是本机显示偏好）。patch = {alias} | {window} | {window:null}。
+export function postModel(model, patch) { return postJSON('/api/models', { model, ...patch }).catch(() => {}); }
 export function setReveal(on) {
   prefs.reveal = on;                                   // optimistic; server confirms via next payload
   postJSON('/api/config', { redact_default: !on }).catch(() => {});

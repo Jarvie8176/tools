@@ -11,6 +11,8 @@ const ORIGIN_LABEL = {
   'cc-session-managed': 'managed', 'rc-env-spawned': 'env-spawned', 'individual-cli': 'individual-cli'
 };
 const shortModel = (m) => (m || '—').replace('claude-', '');
+// window 来源 → 展示后缀（手动 override / 实测证据 / 探测候选 / 未知死角）
+const WIN_SRC = { manual: '手动', evidence: '实测', candidate: '候选', unknown: '?' };
 // server-redacted free text arrives as the marker → render a masked block; else the text itself
 const disp = (t) => (t === REDACT ? BLOCK : t);
 
@@ -52,11 +54,11 @@ export function buildRows() {
       uuid: (s.u8 || '') + '…',
       fullId: s.session_id || s.bridge_id || '',
       bridge: s.bridge_id ? s.bridge_id + '…' : '—',
-      model: orphan ? '—' : shortModel(s.model),
+      model: orphan ? '—' : (s.model_alias || shortModel(s.model)),
       effort: s.session_effort || null,
-      modelStr: orphan ? '—' : (s.session_effort ? `${shortModel(s.model)} · ${s.session_effort}` : shortModel(s.model)),
+      modelStr: orphan ? '—' : ((s.model_alias || shortModel(s.model)) + (s.session_effort ? ` · ${s.session_effort}` : '')),
       cum: orphan ? '—' : (s.full ? `↓${fmtK(s.cum_input)} ↑${fmtK(s.cum_output)}` : '(大会话)'),
-      winStr: fmtK(win) + (s.win_certain ? ' 实测' : ' ?'),
+      winStr: fmtK(win) + ' ' + (WIN_SRC[s.win_source] || (s.win_certain ? '实测' : '?')),
       origin,
       expanded: ui.expanded === s.session_id,
       renaming: ui.renaming === s.session_id

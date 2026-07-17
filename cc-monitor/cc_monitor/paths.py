@@ -16,6 +16,16 @@ TITLES_FILE = os.path.expanduser(
 CONFIG_FILE = os.path.expanduser(
     os.environ.get("CC_MONITOR_CONFIG", os.path.join(CLAUDE_HOME, "cc-monitor-config.json"))
 )
+# Operator-authored per-model config (alias + manual window override), keyed by bare model id.
+# Hand/UI-maintained; the monitor never writes it (see models.py).
+MODELS_FILE = os.path.expanduser(
+    os.environ.get("CC_MONITOR_MODELS", os.path.join(CLAUDE_HOME, "cc-monitor-models.json"))
+)
+# Monitor-written auto-detected window candidates, keyed by bare model id. Kept separate from
+# MODELS_FILE so an automatic write never touches the operator's own config (see candidates.py).
+CANDIDATES_FILE = os.path.expanduser(
+    os.environ.get("CC_MONITOR_CANDIDATES", os.path.join(CLAUDE_HOME, "cc-monitor-window-candidates.json"))
+)
 CCSESSION_DIR = os.environ.get("CC_MONITOR_CCSESSION_DIR", "/tmp/cc-session")
 PROC_DIR = os.environ.get("CC_MONITOR_PROC_DIR", "/proc")
 # Textfile metrics target (Alloy textfile-collector dir, e.g. .../textfile/cc-monitor.prom).

@@ -34,6 +34,8 @@ class FakeClaude:
         self.titles_file = os.path.join(root, "titles.json")
         self.settings_file = os.path.join(root, "settings.json")
         self.otel_file = os.path.join(root, "cc-monitor-otel.json")
+        self.models_file = os.path.join(root, "cc-monitor-models.json")
+        self.candidates_file = os.path.join(root, "cc-monitor-window-candidates.json")
 
     def proc_alive(self, pid, env: dict | None = None, starttime="12345", state="S"):
         d = os.path.join(self.proc, str(pid))
@@ -99,6 +101,16 @@ class FakeClaude:
         with open(self.titles_file, "w") as fh:
             json.dump(mapping, fh)
 
+    def models(self, mapping: dict):
+        """Write the operator per-model config (bare model id -> {alias?, window?})."""
+        with open(self.models_file, "w") as fh:
+            json.dump(mapping, fh)
+
+    def candidates(self, mapping: dict):
+        """Write the monitor-owned auto-detected window candidates (bare model id -> window)."""
+        with open(self.candidates_file, "w") as fh:
+            json.dump(mapping, fh)
+
     def settings(self, mapping: dict):
         with open(self.settings_file, "w") as fh:
             json.dump(mapping, fh)
@@ -117,6 +129,10 @@ def claude(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "PROC_DIR", fc.proc)
     monkeypatch.setattr(paths, "CCSESSION_DIR", fc.ccsession)
     monkeypatch.setattr(paths, "TITLES_FILE", fc.titles_file)
+    # Per-model operator config + monitor-written candidates -> temp files, so collect() never
+    # reads or WRITES the real ~/.claude sidecars (candidate detect-on-write must stay hermetic).
+    monkeypatch.setattr(paths, "MODELS_FILE", fc.models_file)
+    monkeypatch.setattr(paths, "CANDIDATES_FILE", fc.candidates_file)
     # Point at a fake (absent) settings.json so effort reads are hermetic — a test opts in by
     # calling fc.settings({...}); default is unreadable -> effort None (no real ~/.claude read).
     monkeypatch.setattr(paths, "SETTINGS_FILE", fc.settings_file)

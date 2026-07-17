@@ -11,7 +11,9 @@ import json
 import os
 import time
 
-from . import ccsession, config, otel, paths, settings, titles, transcript, window
+from . import (
+    candidates, ccsession, config, models, otel, paths, settings, titles, transcript, window,
+)
 
 # Parse cache keyed by path -> ((mtime, size), result). The result carries an internal `_offset`
 # byte cursor: on a cache miss we extend the prior parse with only the appended bytes instead of
@@ -124,6 +126,12 @@ def collect(now: float | None = None) -> dict:
     now = time.time() if now is None else now
     overrides = titles.load()
     gap = config.load()["busy_idle_gap"]
+    # Per-model operator config (alias + manual window override) and the monitor's auto-detected
+    # window candidates, both keyed by bare model id — read once, joined per row (see window
+    # precedence below). `cand_map` may be mutated in-loop when a fresh evidence detection is
+    # recorded; `cand_dirty` gates a single re-persist attempt per collect.
+    models_map = models.load()
+    cand_map = candidates.load()
     # settings.json `env`-block model/context keys — global, so read once. These are applied
     # internally by Claude Code and are absent from /proc/environ, so they act as the fallback
     # window signal for workers (e.g. `claude --resume`) whose exec env lacks them. Its mtime gates
@@ -171,9 +179,22 @@ def collect(now: float | None = None) -> dict:
             settings_mtime is not None and started_at is not None
             and settings_mtime <= started_at / 1000
         )
-        win, win_certain = window.resolve(
-            window.read_model_env(pid), settings_env, info.get("model"),
+        model = info.get("model")
+        # Pure-evidence window: resolve() sees ONLY proc env / settings / observed peak — never the
+        # operator override or a candidate. So `ev_certain` marks a real detection, and the candidate
+        # write below (gated on it) can never launder a manual override back in as "detected".
+        ev_win, ev_certain = window.resolve(
+            window.read_model_env(pid), settings_env, model,
             info.get("peak_ctx", 0), settings_trusted,
+        )
+        # Evidence-only candidate write: record model->window when evidence is certain and the value
+        # changed. Dedupe by value so a steady state doesn't rewrite the file every tick.
+        if model and ev_certain and candidates.get(cand_map, model) != ev_win:
+            cand_map = candidates.save(model, ev_win)
+        # Precedence: manual override > evidence > candidate (fills the '?' deadzone only).
+        win, win_certain, win_source = window.apply_model_window(
+            ev_win, ev_certain, models.override_of(models_map, model),
+            candidates.get(cand_map, model),
         )
         managed = sid[:8] in ledger  # a cc-session .url ledger hit — authoritative "managed" signal
         info.update({
@@ -189,7 +210,8 @@ def collect(now: float | None = None) -> dict:
             "status": "orphaned" if live == "orphaned"
             else _status(reg.get("status"), status_ts, info["mtime"], idle_s, gap),
             "idle_s": idle_s,
-            "win": win, "win_certain": win_certain,
+            "win": win, "win_certain": win_certain, "win_source": win_source,
+            "model_alias": models.alias_of(models_map, model),
             "override_title": titles.resolve(overrides, sid, bridge),
         })
         # per-session effort from the OTel sidecar (this session's own requests), distinct from the
@@ -217,8 +239,35 @@ def collect(now: float | None = None) -> dict:
     return {
         "rows": rows, "prom": prom or {}, "cc_session": prom is not None,
         "effort": settings.effort_level(),  # global CLI effort (settings.json); None if unreadable
-        "recon": recon, "ts": now,
+        "recon": recon, "models": _model_summary(rows, models_map, cand_map), "ts": now,
     }
+
+
+def _model_summary(rows: list, models_map: dict, cand_map: dict) -> list:
+    """Per-model rollup for the settings UI: one entry per distinct bare model in view, carrying
+    its operator config (alias/override), the auto-detected candidate, live session count, and a
+    representative resolved window. Sessions of one model share the model-level fields; the window
+    is taken from the first row (they agree unless per-session evidence differs, which the source
+    tag then explains). Sorted by session count desc so the busiest models surface first."""
+    order: list = []
+    seen: dict = {}
+    for r in rows:
+        m = r.get("model")
+        if not m:
+            continue
+        if m not in seen:
+            seen[m] = {
+                "model": m,
+                "alias": models.alias_of(models_map, m),
+                "override": models.override_of(models_map, m),
+                "candidate": candidates.get(cand_map, m),
+                "win": r.get("win"), "win_certain": r.get("win_certain"),
+                "win_source": r.get("win_source"), "sessions": 0,
+            }
+            order.append(seen[m])
+        seen[m]["sessions"] += 1
+    order.sort(key=lambda e: -e["sessions"])
+    return order
 
 
 def title_of(row: dict) -> tuple[str, str]:
