@@ -932,6 +932,56 @@ autoname_for() {
   refute_contains "$pane" "DISABLE_AUTO_COMPACT"
 }
 
+# --- --manual mode ---------------------------------------------------
+
+@test "--manual without --teleport or --resume exits 2" {
+  run "$CC_SESSION" --manual
+  assert_eq "$status" 2
+  assert_contains "$output" -- "--manual requires --teleport or --resume"
+}
+
+@test "--manual + --full rejected (manual skips the automation --full drives)" {
+  CC_SESSION_SKIP_FULL_CONFIRM=1 run "$CC_SESSION" -t session_TEST --manual --full
+  assert_eq "$status" 2
+  assert_contains "$output" -- "--manual and --full don't combine"
+}
+
+@test "--manual + --compact rejected (manual skips the post-launch /compact)" {
+  run "$CC_SESSION" -t session_TEST --manual --compact
+  assert_eq "$status" 2
+  assert_contains "$output" -- "--manual and --compact don't combine"
+}
+
+@test "--manual --teleport launches claude but sends NO resume key / slash command" {
+  run "$CC_SESSION" -d -t session_TEST --manual "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  # claude --teleport is running with the right id ...
+  args="$(pane_args "$SESSION_NAME")"
+  assert_contains "$args" -- "--teleport session_TEST"
+  # ... but manual mode skips ALL post-launch automation. Give the
+  # (now-absent) keystroke flow more than enough time to fire.
+  sleep 3
+  pane="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  refute_contains "$pane" "fake: resume key summary (Enter) received"
+  refute_contains "$pane" "fake: resume key full (Down) received"
+  refute_contains "$pane" "/remote-control is active"
+  # No URL was captured, so no state .url file is written.
+  state_file="${BATS_TMPDIR}/cc-session/$SESSION_NAME.url"
+  if [ -f "$state_file" ]; then
+    echo "manual mode wrongly captured a URL: $(cat "$state_file")" >&2
+    return 1
+  fi
+}
+
+@test "CC_SESSION_MANUAL=1 env var is equivalent to --manual" {
+  CC_SESSION_MANUAL=1 run "$CC_SESSION" -d -t session_TEST "$TEST_DIR" "$SESSION_NAME"
+  assert_eq "$status" 0
+  sleep 3
+  pane="$(tmux capture-pane -t "$SESSION_NAME" -p -S -200)"
+  refute_contains "$pane" "fake: resume key summary (Enter) received"
+  refute_contains "$pane" "/remote-control is active"
+}
+
 # --- --adopt flag ----------------------------------------------------
 
 @test "--adopt + --teleport mutually exclusive" {

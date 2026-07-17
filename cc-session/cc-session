@@ -18,7 +18,7 @@ NAME
 
 SYNOPSIS
     $PROG [-w|--worktree NAME] [-t|--teleport ID-OR-URL] [-r|--resume UUID]
-              [-f|--full] [-c|--compact]
+              [-f|--full] [-c|--compact] [-m|--manual]
               [-d|--detach] [-l|--list] [-k|--kill NAME]
               [--status [SESSION_NAME]]
               [-v|--version] [-h|--help] [PROJECT_DIR] [SESSION_NAME]
@@ -156,6 +156,27 @@ OPTIONS
                       a tmux display-message warning) — claude's state
                       is unknown and the slash would land in arbitrary
                       input.
+
+    -m, --manual      Launch the tmux session running claude
+                      --teleport/--resume, then hand the raw pane to
+                      you and stop — skip ALL post-launch automation:
+                      the resume-menu keystroke, /remote-control,
+                      /compact, and the teleport auto-reaper. Use when
+                      you want to drive resume/RC/compact by hand: pick
+                      summary-vs-full in the TUI yourself, inspect the
+                      transcript before enabling RC, or debug a session
+                      that dies under automation.
+
+                      Requires --teleport or --resume (a server-mode
+                      launch has no post-launch keystrokes to skip).
+                      Mutually exclusive with --full and --compact,
+                      whose automation --manual would skip. Combine
+                      with --detach to leave the session running
+                      without attaching. Equivalent to
+                      CC_SESSION_MANUAL=1. Enable Remote Control later
+                      with /remote-control in the pane (or
+                      \`cc-session --adopt <name>\`), and clean up with
+                      \`cc-session --kill <name>\`.
 
     -f, --full        With --teleport, resume from the FULL transcript
                       instead of the default summary. This re-pays the
@@ -306,6 +327,14 @@ ENVIRONMENT
                                     cc-session/audit.jsonl. The audit is
                                     best-effort — a read-only path never
                                     fails a launch.
+    CC_SESSION_MANUAL               Set to 1 for manual mode (same as
+                                    --manual): bring up the tmux session
+                                    + claude --teleport/--resume, then
+                                    skip every post-launch keystroke
+                                    (resume selection, /remote-control,
+                                    /compact) and the auto-reaper, and
+                                    hand the pane over. Only affects
+                                    --teleport / --resume launches.
     CC_SESSION_NO_REAP              Set to 1 to disable the teleport-mode
                                     auto-reaper entirely (the dead pane
                                     is then preserved like server-mode).
@@ -1185,6 +1214,12 @@ RUN_COMPACT=0
 RESUME_FULL=0
 ADOPT=0
 WORKTREE_NAME=""
+# Manual mode: launch the tmux session + claude --teleport/--resume, then
+# hand the pane straight to the operator — skip ALL post-launch automation
+# (resume-menu keystroke, /remote-control, /compact, and the auto-reaper).
+# The CLI flag --manual and the CC_SESSION_MANUAL env var are equivalent
+# entry points; the flag simply pins the same value.
+MANUAL="${CC_SESSION_MANUAL:-0}"
 # Whether SESSION_NAME came from an explicit positional (1) or was
 # auto-derived (0). Drives lever ①: a teleport/resume launch with no
 # explicit name gets a collision-safe auto name instead of 'claude'.
@@ -1277,6 +1312,8 @@ while (( $# )); do
       shift 2 ;;
     -c|--compact)
       RUN_COMPACT=1; shift ;;
+    -m|--manual)
+      MANUAL=1; shift ;;
     -f|--full)
       RESUME_FULL=1; shift ;;
     -a|--adopt)
@@ -1337,6 +1374,38 @@ if (( RESUME_FULL )) && (( RUN_COMPACT )); then
   echo "       would immediately summarize it, defeating --full's purpose." >&2
   echo "       Either drop --full (use teleport's default summary mode)" >&2
   echo "       or drop --compact (keep the full transcript in context)." >&2
+  exit 2
+fi
+
+# --manual hands the raw pane to the operator and skips every post-launch
+# keystroke. It only makes sense on a launch that HAS post-launch
+# automation to skip — i.e. --teleport or --resume. A default (server-mode)
+# launch has no resume menu / slash-command bridge to bypass, so --manual
+# there is a silent no-op. Refuse it. (MANUAL is a string — it can arrive
+# via CC_SESSION_MANUAL — so compare with [[ ]], never (( )), which would
+# trip set -e on a non-numeric value.)
+if [[ "$MANUAL" == "1" ]] && [[ -z "$TELEPORT_ID" ]] && [[ -z "$RESUME_UUID" ]]; then
+  echo "$PROG: --manual requires --teleport or --resume" >&2
+  echo "       (a default server-mode launch has no post-launch keystrokes" >&2
+  echo "        to skip, so --manual would be a silent no-op there.)" >&2
+  exit 2
+fi
+
+# --manual + --full / --compact are contradictions: --manual skips exactly
+# the automation those flags drive. --full's auto resume-menu selection is
+# never sent (you pick summary/full yourself in the TUI); --compact's
+# post-URL keystroke is skipped entirely. Refuse rather than silently
+# ignore, matching the no-op rejections above.
+if [[ "$MANUAL" == "1" ]] && (( RESUME_FULL )); then
+  echo "$PROG: --manual and --full don't combine: --manual skips the" >&2
+  echo "       automatic resume-menu selection --full would drive. In" >&2
+  echo "       manual mode you choose summary/full yourself in the TUI." >&2
+  exit 2
+fi
+if [[ "$MANUAL" == "1" ]] && (( RUN_COMPACT )); then
+  echo "$PROG: --manual and --compact don't combine: --manual skips the" >&2
+  echo "       post-launch /compact keystroke. Send /compact yourself once" >&2
+  echo "       you're in the pane." >&2
   exit 2
 fi
 
@@ -2091,8 +2160,13 @@ fi
 #      $TMPDIR/cc-session/<SESSION>.url and flash it via tmux
 #      display-message so the URL is visible without grepping.
 (
-  if [[ "${CC_SESSION_MANUAL:-}" == "1" ]]; then
-    echo "$PROG: MANUAL mode — skipping all automation (resume key, /remote-control, /compact)" >&2
+  if [[ "$MANUAL" == "1" ]]; then
+    # Manual mode: the tmux session is up with claude --teleport/--resume
+    # running; hand it to the operator untouched. Skip the resume-menu
+    # keystroke, /remote-control, /compact, AND the auto-reaper (the whole
+    # subshell). Lifecycle is now the operator's: enable RC via
+    # /remote-control by hand, and clean up with `cc-session --kill`.
+    echo "$PROG: manual mode — skipping all automation (resume key, /remote-control, /compact, reaper)" >&2
     exit 0
   fi
 

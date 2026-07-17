@@ -374,6 +374,16 @@ cc-session --teleport <url> --full
 # in 0.4+; the cc-session script knows when claude has reached idle):
 cc-session --teleport <url> --compact
 
+# MANUAL mode: just bring up the tmux pane running `claude --teleport
+# <id>` and hand it to you — skip ALL post-launch automation (the
+# resume-menu keystroke, /remote-control, /compact, and the auto-reaper).
+# You then drive it by hand: pick summary-vs-full in the TUI, run
+# /remote-control when ready, /compact when you want. Combine with -d to
+# leave it running without attaching; equivalent to CC_SESSION_MANUAL=1.
+# Requires --teleport/--resume; mutually exclusive with --full/--compact.
+cc-session --teleport <url> --manual
+cc-session --teleport <url> --manual -d   # detached; attach later
+
 # A cc-session-managed session is already running but RC isn't visible
 # in claude.ai/code (e.g. /remote-control was never invoked, or you
 # disconnected it earlier) — just register a fresh RC URL on the spot:
