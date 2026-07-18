@@ -116,7 +116,7 @@ def write_textfile(text: str, path: str | None) -> None:
     Uses a plain ``open`` (NOT ``tempfile.mkstemp``, which forces 0600) so the file lands at the
     process umask — 0644 under the systemd unit (UMask 022). That matches the fleet convention: the
     node-exporter textfile collector runs as ``nobody`` and reads the world-readable ``*.prom`` the
-    other ccrc-written generators already produce (e.g. ``cc_session_mem.prom``). A hardcoded chmod
+    other user-run textfile generators already produce (e.g. ``cc_session_mem.prom``). A hardcoded chmod
     would either be too tight (0600 → nobody can't read) or trip CodeQL (world/group read); letting
     umask decide is both correct here and how every other textfile generator does it.
     """

@@ -27,14 +27,17 @@ from .collect import collect
 log = logging.getLogger("cc-monitor")
 
 # Free-text fields masked when redact_default is on — same set the HTML/text renderers redact.
-_REDACT_FIELDS = ("custom_title", "override_title", "initial_prompt", "last_prompt")
+# model_alias is operator-authored free text (can hold a private label), so it is redacted too; the
+# client then falls back to the non-sensitive raw model id. The models[] summary's alias is masked
+# separately in serialize() below.
+_REDACT_FIELDS = ("custom_title", "override_title", "initial_prompt", "last_prompt", "model_alias")
 
 # Row fields exposed over the API. `mtime` is remapped to `last_activity_ts` (absolute) so the
 # client can tick idle locally without a server push; `idle_s`/`ts` are deliberately excluded
 # from the payload so a mere clock advance is not a "change".
 _API_FIELDS = (
-    "session_id", "u8", "pid", "name", "model", "status",
-    "ctx", "peak_ctx", "win", "win_certain",
+    "session_id", "u8", "pid", "name", "model", "model_alias", "status",
+    "ctx", "peak_ctx", "win", "win_certain", "win_source",
     "cum_input", "cum_output", "cum_cache", "full",
     "bridge_id", "bridge_short", "custom_title", "override_title",
     "initial_prompt", "last_prompt", "session_effort",
@@ -56,9 +59,17 @@ def serialize(d: dict) -> bytes:
             s[f] = privacy.redact(s.get(f), on)
         s["last_activity_ts"] = r.get("mtime")
         sessions.append(s)
+    # The per-model summary drives the settings editor. Its alias is the same operator free text, so
+    # mask it under redaction too — the editor reveals it (server-side) when the operator flips the
+    # reveal toggle. Copy each entry so the mask never mutates the shared collect() result.
+    models = []
+    for m in d.get("models", []):
+        mm = dict(m)
+        mm["alias"] = privacy.redact(mm.get("alias"), on)
+        models.append(mm)
     return json.dumps(
         {"sessions": sessions, "prom": d["prom"], "cc_session": d.get("cc_session", False),
-         "effort": d.get("effort"), "recon": d.get("recon", {})},
+         "effort": d.get("effort"), "recon": d.get("recon", {}), "models": models},
         separators=(",", ":"),
     ).encode()
 

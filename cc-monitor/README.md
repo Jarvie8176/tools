@@ -11,7 +11,15 @@ It exists because Claude Code's remote-control GUI context readout is unstable (
 scrapes `Capacity: N/M` from a tmux pane has no per-worker token view). cc-monitor routes around
 that by reading the authoritative local sources directly.
 
-## What it reads (all local, read-only)
+## What it reads (all local)
+
+It reads the sources below read-only. The only files it ever **writes** are its own local sidecars
+in `~/.claude/`, and only when you (or an auto-detection) ask it to: `cc-monitor-config.json`
+(runtime knobs), `cc-monitor-titles.json` (title overrides), `cc-monitor-models.json` (per-model
+alias + manual window override — operator-owned), and `cc-monitor-window-candidates.json`
+(auto-detected window candidates — monitor-owned, kept separate so an automatic write never touches
+your hand-maintained config). It never writes a transcript, a registry entry, or anything upstream.
+
 
 | Source | Provides |
 |---|---|
@@ -67,13 +75,21 @@ The `serve` mode exposes, alongside the HTML dashboard:
 | `GET /api/stream` | Server-Sent Events — one `data:` frame per real change, heartbeats between |
 | `GET /api/config` · `POST /api/config` | read / update the runtime config (schema-gated, persisted) |
 | `POST /api/titles` | set/clear a local title override — `{key: sessionId\|bridgeSessionId, title}` (empty title clears); atomic write |
+| `POST /api/models` | set/clear a model's alias and/or manual window override — `{model, alias?, window?}` (empty alias / null window clears that field); also the "adopt candidate" path (POST the detected window as `window`); atomic write |
 | `GET /metrics` | Prometheus exposition — **aggregate** session gauges (see below) |
 
 The dashboard at `/` is a zero-horizontal-scroll SPA: any viewport shows 5 importance-ordered
 fields (status → name → latest prompt → context → idle); origin, bridge, model, cum tokens and the
 opening prompt drill down into an expand panel. Three density presets (patrol / standard / debug),
-a settings drawer (reveal · theme · prompt line-clamp · ctx thresholds · columns), and in-place
-rename (writing back via `POST /api/titles`). Prompt summaries truncate by visual line count (CSS
+a settings drawer (reveal · theme · prompt line-clamp · ctx thresholds · columns · per-model
+alias + window override), and in-place rename (writing back via `POST /api/titles`). The settings
+drawer's **模型 / 窗口容量** section makes each model's window capacity visible and lets you set an
+alias or a manual window override, or adopt an auto-detected window candidate (writes via
+`POST /api/models` — server-side, not a browser-local pref). A model **alias is free text and is
+treated as private**: like the prompt/title, it is redacted under `redact_default` (masked in the
+API/SSE payload and every render path; the dashboard falls back to the raw model id, which is
+non-sensitive), and the settings alias field is editable only with reveal on. The window
+override/candidate are numeric and are never redacted. Prompt summaries truncate by visual line count (CSS
 line-clamp), so CJK reads as a first-class script. Display prefs persist in `localStorage`; reveal
 is a server behaviour switch (`redact_default`), single-user with no per-device auth. `/legacy`
 still serves the no-JS `<meta refresh>` fallback for curl.
@@ -149,8 +165,13 @@ cd ../.wt/cc-monitor-dev && install/deploy-dev.sh   # -> cc-monitor-dev.service 
 - **Titles**: remote-control env-spawned sessions (the GUI's set) have no local `custom-title`
   — the real title is cloud-side. Shown as `— (cloud-side)`. Fill locally via a manual override
   file `~/.claude/cc-monitor-titles.json` (`{"<uuid|session_xxx>": "title"}`).
-- **Window `?`**: if a worker's env is unreadable and usage never crossed 200k, the true
-  window is locally unknowable (statusLine/OTel would resolve it). Flagged, not guessed.
+- **Window `?`**: if a worker's env is unreadable and usage never crossed 200k, the true window is
+  locally unknowable from live evidence. It is never guessed from thin air, but two local mechanisms
+  can fill it: an auto-detected **candidate** (a window this monitor previously resolved for the same
+  model from real evidence — shown as 候选, `certain=false`, and it never overrides live evidence),
+  or a **manual override** you set per model in the settings drawer (shown as 手动, authoritative).
+  Precedence, high→low: manual override > proc `CLAUDE_CODE_MAX_CONTEXT_TOKENS` > `[1m]` env > peak
+  lower-bound > candidate.
 - **Cumulative tokens** are a reference display, not a billing figure (`output_tokens`
   is undercounted upstream — #27361). Use `ccusage` for accounting.
 

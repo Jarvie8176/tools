@@ -93,6 +93,37 @@ def resolve_window(env, model, peak_ctx):
     return win, certain
 
 
+# Window "source" tags for the payload/UI — where a session's window value came from. Only the
+# first three are real evidence; "candidate" is a detected snapshot; "unknown" is the locally-
+# unknowable deadzone (env unreadable + low usage). The candidate write-gate keys off EVIDENCE.
+SRC_MANUAL = "manual"       # operator override (models.json) — highest precedence
+SRC_EVIDENCE = "evidence"   # resolve() decided it from proc env / settings / observed peak
+SRC_CANDIDATE = "candidate"  # filled from an auto-detected candidate (deadzone only)
+SRC_UNKNOWN = "unknown"     # nothing authoritative — UI shows '?'
+
+
+def apply_model_window(ev_win, ev_certain, override_win, candidate_win):
+    """Layer per-model operator override (top) + detected candidate (bottom) over the evidence.
+
+    ``ev_win``/``ev_certain`` are the PURE-EVIDENCE result from :func:`resolve` (which never sees
+    override/candidate). Precedence, high -> low: manual override > evidence > candidate. Returns
+    ``(window, certain, source)``.
+
+    - override (>0) is authoritative -> ``certain=True`` (operator sovereignty).
+    - else if evidence is certain, it stands (proc/settings/peak decided it).
+    - else a candidate fills the '?' deadzone — value shown, but ``certain=False`` since it is a
+      prior snapshot, not live evidence; it NEVER overrides a certain evidence result above.
+    - else the unknowable baseline (``ev_win``, ``certain=False``) with source 'unknown'.
+    """
+    if override_win and override_win > 0:
+        return override_win, True, SRC_MANUAL
+    if ev_certain:
+        return ev_win, True, SRC_EVIDENCE
+    if candidate_win and candidate_win > 0:
+        return candidate_win, False, SRC_CANDIDATE
+    return ev_win, ev_certain, SRC_UNKNOWN
+
+
 def resolve(proc_env, settings_env, model, peak_ctx, settings_trusted):
     """Full window resolution layering the settings.json ``env`` block under the ``/proc`` env.
 

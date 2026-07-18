@@ -117,3 +117,40 @@ def test_resolve_settings_max_context_untrusted_uncertain():
     s = {"CLAUDE_CODE_MAX_CONTEXT_TOKENS": "500000"}
     assert window.resolve({}, s, "claude-opus-4-8", 10_000, False) == (500_000, False)
     assert window.resolve({}, s, "claude-opus-4-8", 10_000, True) == (500_000, True)
+
+
+# ── apply_model_window: layer operator override + detected candidate over the evidence result ──
+from cc_monitor.window import (  # noqa: E402
+    SRC_CANDIDATE, SRC_EVIDENCE, SRC_MANUAL, SRC_UNKNOWN, apply_model_window,
+)
+
+
+def test_apply_manual_override_is_authoritative():
+    # override wins even over a certain evidence result, and always reads certain
+    assert apply_model_window(200_000, True, 1_000_000, None) == (1_000_000, True, SRC_MANUAL)
+
+
+def test_apply_override_beats_candidate_and_unknown():
+    assert apply_model_window(200_000, False, 777_000, 500_000) == (777_000, True, SRC_MANUAL)
+
+
+def test_apply_certain_evidence_stands_when_no_override():
+    assert apply_model_window(1_000_000, True, None, None) == (1_000_000, True, SRC_EVIDENCE)
+
+
+def test_apply_evidence_beats_candidate():
+    # a candidate must NEVER override live certain evidence (anti stale-clobber)
+    assert apply_model_window(1_000_000, True, None, 200_000) == (1_000_000, True, SRC_EVIDENCE)
+
+
+def test_apply_candidate_fills_deadzone_but_not_certain():
+    # env unreadable + low usage -> ev uncertain; candidate supplies a value, still flagged '?'
+    assert apply_model_window(200_000, False, None, 1_000_000) == (1_000_000, False, SRC_CANDIDATE)
+
+
+def test_apply_unknown_when_nothing_authoritative():
+    assert apply_model_window(200_000, False, None, None) == (200_000, False, SRC_UNKNOWN)
+
+
+def test_apply_ignores_non_positive_override_and_candidate():
+    assert apply_model_window(200_000, False, 0, 0) == (200_000, False, SRC_UNKNOWN)

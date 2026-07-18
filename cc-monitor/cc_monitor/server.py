@@ -9,7 +9,7 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import config, titles, webui
+from . import config, models, titles, webui
 from .collect import collect
 from .otel_sink import OtelSink
 from .render import render_html
@@ -92,6 +92,8 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                     self._save_config()
                 elif path == "/api/titles":
                     self._save_title()
+                elif path == "/api/models":
+                    self._save_model()
                 else:
                     self._notfound()
             except (BrokenPipeError, ConnectionResetError):
@@ -148,6 +150,45 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                 self._json({"error": "'title' must be a string"}, 400)
                 return
             titles.save(key.strip(), title or "")  # empty/None -> clear override
+            self._json({"ok": True})
+
+        def _save_model(self):
+            # Per-model operator config: {model: str, alias?: str|null, window?: int|null}. Only the
+            # fields present in the body are touched; an empty alias / non-positive window clears
+            # that field (models.save is the schema gate). Also the "adopt candidate" path — the UI
+            # promotes a detected window by POSTing it as `window`.
+            try:
+                length = int(self.headers.get("Content-Length") or 0)
+            except ValueError:
+                length = 0
+            if length <= 0 or length > _MAX_BODY:
+                self._json({"error": "bad or missing Content-Length"}, 400)
+                return
+            try:
+                data = json.loads(self.rfile.read(length))
+            except ValueError:
+                self._json({"error": "invalid JSON"}, 400)
+                return
+            model = data.get("model") if isinstance(data, dict) else None
+            if not isinstance(model, str) or not model.strip():
+                self._json({"error": "missing or empty 'model'"}, 400)
+                return
+            kw = {}
+            if "alias" in data:
+                alias = data["alias"]
+                if alias is not None and not isinstance(alias, str):
+                    self._json({"error": "'alias' must be a string or null"}, 400)
+                    return
+                kw["alias"] = alias or ""  # null/empty -> clear
+            if "window" in data:
+                win = data["window"]
+                # A window is a positive integer token count. Reject bool (a JSON true/false) and
+                # float (200000.9) rather than silently truncating — the sidecar schema is int.
+                if win is not None and (isinstance(win, bool) or not isinstance(win, int)):
+                    self._json({"error": "'window' must be an integer or null"}, 400)
+                    return
+                kw["window"] = win or 0  # null/0 -> clear
+            models.save(model.strip(), **kw)
             self._json({"ok": True})
 
         def _ok(self, body: bytes):

@@ -260,3 +260,74 @@ def test_orphaned_session_shown_as_orphaned_not_idle(claude):
     rows = collect.collect()["rows"]
     z = [r for r in rows if r["session_id"] == "zsid"]
     assert len(z) == 1 and z[0]["status"] == "orphaned"  # surfaced, not filtered, not "idle"
+
+
+# ── per-model window override / alias / auto-detected candidate ──────────────────────────
+from cc_monitor import candidates  # noqa: E402
+
+
+def _one_session(claude, pid=505, sid="mdl-uuid", env=None, peak=120_000, drop_env=False):
+    claude.registry(pid, sid, "/home/x/p", name="cc-05")
+    claude.proc_alive(pid, env or {})
+    if drop_env:  # make /proc/<pid>/environ unreadable -> resolve falls to peak-only (may be '?')
+        os.remove(os.path.join(claude.proc, str(pid), "environ"))
+    claude.transcript(sid, "/home/x/p", [assistant("claude-opus-4-8", inp=peak)])
+    return sid
+
+
+def test_manual_override_wins_and_tags_source(claude):
+    claude.models({"claude-opus-4-8": {"window": 300_000}})
+    _one_session(claude, env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_source"]) == (300_000, True, "manual")
+
+
+def test_override_is_never_written_back_as_candidate(claude):
+    # P1: a manual override must NOT leak into the monitor-owned candidate file. The candidate is
+    # written from PURE evidence (the [1m] env => 1M), never from the operator's 300k override.
+    claude.models({"claude-opus-4-8": {"window": 300_000}})
+    _one_session(claude, env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
+    collect.collect()
+    assert candidates.load() == {"claude-opus-4-8": 1_000_000}  # evidence value, not the override
+
+
+def test_candidate_written_on_certain_evidence(claude):
+    _one_session(claude, env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
+    row = collect.collect()["rows"][0]
+    assert row["win_source"] == "evidence"
+    assert candidates.load() == {"claude-opus-4-8": 1_000_000}
+
+
+def test_candidate_fills_deadzone_flagged_uncertain(claude):
+    # env unreadable + low usage = the locally-unknowable '?' deadzone; a prior candidate fills it
+    claude.candidates({"claude-opus-4-8": 1_000_000})
+    _one_session(claude, peak=50_000, drop_env=True)
+    row = collect.collect()["rows"][0]
+    assert (row["win"], row["win_certain"], row["win_source"]) == (1_000_000, False, "candidate")
+
+
+def test_no_candidate_written_in_deadzone(claude):
+    # uncertain evidence must not manufacture a candidate (nothing to trust)
+    _one_session(claude, peak=50_000, drop_env=True)
+    row = collect.collect()["rows"][0]
+    assert row["win_source"] == "unknown"
+    assert candidates.load() == {}
+
+
+def test_alias_surfaces_on_row_and_in_model_summary(claude):
+    claude.models({"claude-opus-4-8": {"alias": "Opus-Big", "window": 500_000}})
+    _one_session(claude, env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
+    d = collect.collect()
+    assert d["rows"][0]["model_alias"] == "Opus-Big"
+    summary = {e["model"]: e for e in d["models"]}["claude-opus-4-8"]
+    assert summary["alias"] == "Opus-Big" and summary["override"] == 500_000
+    assert summary["sessions"] == 1 and summary["candidate"] == 1_000_000
+
+
+def test_candidate_not_rewritten_when_unchanged(claude):
+    # steady state: an identical detected value must not rewrite the file (dedupe by value)
+    claude.candidates({"claude-opus-4-8": 1_000_000})
+    before = os.path.getmtime(claude.candidates_file)
+    _one_session(claude, env={"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-8[1m]"})
+    collect.collect()
+    assert os.path.getmtime(claude.candidates_file) == before  # untouched
