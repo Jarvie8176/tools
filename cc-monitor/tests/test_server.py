@@ -191,3 +191,19 @@ def test_api_models_rejects_bad_json(base_url, tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "MODELS_FILE", str(tmp_path / "models.json"))
     status, _ = _post(base_url + "/api/models", b"{not json")
     assert status == 400
+
+
+def test_manifest_is_served_and_valid(base_url):
+    status, body = _get(base_url + "/manifest.webmanifest")
+    assert status == 200
+    m = json.loads(body)
+    # installability essentials: standalone display + a usable icon
+    assert m["display"] == "standalone" and m["start_url"] == "/"
+    assert m["icons"] and m["icons"][0]["src"].startswith("data:image/svg+xml")
+    assert m["theme_color"] == "#0d1218"
+
+
+def test_manifest_content_type(base_url):
+    import urllib.request
+    with urllib.request.urlopen(base_url + "/manifest.webmanifest") as r:
+        assert r.headers.get("Content-Type", "").startswith("application/manifest+json")
