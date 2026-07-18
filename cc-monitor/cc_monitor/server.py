@@ -182,8 +182,10 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                 kw["alias"] = alias or ""  # null/empty -> clear
             if "window" in data:
                 win = data["window"]
-                if win is not None and (isinstance(win, bool) or not isinstance(win, (int, float))):
-                    self._json({"error": "'window' must be a number or null"}, 400)
+                # A window is a positive integer token count. Reject bool (a JSON true/false) and
+                # float (200000.9) rather than silently truncating — the sidecar schema is int.
+                if win is not None and (isinstance(win, bool) or not isinstance(win, int)):
+                    self._json({"error": "'window' must be an integer or null"}, 400)
                     return
                 kw["window"] = win or 0  # null/0 -> clear
             models.save(model.strip(), **kw)

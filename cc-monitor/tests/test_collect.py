@@ -263,7 +263,7 @@ def test_orphaned_session_shown_as_orphaned_not_idle(claude):
 
 
 # ── per-model window override / alias / auto-detected candidate ──────────────────────────
-from cc_monitor import candidates, models  # noqa: E402
+from cc_monitor import candidates  # noqa: E402
 
 
 def _one_session(claude, pid=505, sid="mdl-uuid", env=None, peak=120_000, drop_env=False):

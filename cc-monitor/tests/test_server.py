@@ -149,3 +149,45 @@ def test_stream_refused_past_connection_cap(monkeypatch):
     finally:
         broker.stop()
         httpd.shutdown()
+
+
+def test_api_models_post_persists(base_url, tmp_path, monkeypatch):
+    mf = str(tmp_path / "models.json")
+    monkeypatch.setattr(paths, "MODELS_FILE", mf)
+    status, body = _post(base_url + "/api/models",
+                         json.dumps({"model": "claude-opus-4-8", "alias": "Opus", "window": 500000}).encode())
+    assert status == 200 and json.loads(body) == {"ok": True}
+    from cc_monitor import models
+    assert models.load(mf) == {"claude-opus-4-8": {"alias": "Opus", "window": 500000}}
+
+
+def test_api_models_post_clears_fields(base_url, tmp_path, monkeypatch):
+    mf = str(tmp_path / "models.json")
+    monkeypatch.setattr(paths, "MODELS_FILE", mf)
+    _post(base_url + "/api/models", json.dumps({"model": "m", "alias": "A", "window": 300000}).encode())
+    _post(base_url + "/api/models", json.dumps({"model": "m", "alias": "", "window": None}).encode())
+    from cc_monitor import models
+    assert models.load(mf) == {}                      # both fields cleared -> entry dropped
+
+
+def test_api_models_rejects_missing_model(base_url, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "MODELS_FILE", str(tmp_path / "models.json"))
+    status, _ = _post(base_url + "/api/models", json.dumps({"alias": "no model"}).encode())
+    assert status == 400
+    status, _ = _post(base_url + "/api/models", json.dumps({"model": "  "}).encode())
+    assert status == 400
+
+
+def test_api_models_rejects_float_and_bool_window(base_url, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "MODELS_FILE", str(tmp_path / "models.json"))
+    # a float would be silently truncated by int() downstream — reject at the boundary instead
+    status, _ = _post(base_url + "/api/models", json.dumps({"model": "m", "window": 200000.9}).encode())
+    assert status == 400
+    status, _ = _post(base_url + "/api/models", json.dumps({"model": "m", "window": True}).encode())
+    assert status == 400
+
+
+def test_api_models_rejects_bad_json(base_url, tmp_path, monkeypatch):
+    monkeypatch.setattr(paths, "MODELS_FILE", str(tmp_path / "models.json"))
+    status, _ = _post(base_url + "/api/models", b"{not json")
+    assert status == 400
