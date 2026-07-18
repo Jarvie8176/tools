@@ -36,14 +36,18 @@ def short_model(m) -> str:
     return _clean((m or "-").replace("claude-", ""))
 
 
-def disp_model(r: dict) -> str:
+def disp_model(r: dict, redact: bool = False) -> str:
     """Display label for a row's model: the operator alias if set, else the shortened raw id.
 
     Display-only — the raw ``model`` field is never rewritten (it stays the join/metrics key). Keeps
     every render path (text / static HTML / legacy) consistent with the SPA, which prefers the alias.
+
+    ``redact`` (the ``redact_default`` posture) suppresses the alias: an alias is operator-authored
+    free text that can hold a private label, so under redaction it is treated like the prompt/title
+    and NOT shown — we fall back to the shortened raw model id, which is structural/non-sensitive.
     """
     alias = r.get("model_alias")
-    return _clean(alias) if alias else short_model(r.get("model"))
+    return _clean(alias) if (alias and not redact) else short_model(r.get("model"))
 
 
 def _idle(idle_s: float) -> str:
@@ -118,7 +122,7 @@ def render_text(d: dict) -> str:
         seff = trunc(r.get("session_effort") or "·", 6)  # per-session effort (OTel); '·' = no data
         lines.append(
             f" {mark} {r['u8']:8s} {_clean(r['name']):6s} {_origin_abbr(r.get('origin')):4s} "
-            f"{disp_model(r):11s} "
+            f"{disp_model(r, redact_on):11s} "
             f"{seff:6s} {ctx_s:>7s}[{bar}]{pct:3.0f}% {cum:>12s} {_idle(r['idle_s']):>5s}  "
             f"{title:22s} {initp} {lastp}"
         )
@@ -155,7 +159,7 @@ def _row_html(r: dict, cfg: dict | None = None) -> str:
     # every dynamic field is control-char-stripped then escaped — name/model/bridge come from
     # registry/transcript (semi-trusted)
     name = _html.escape(_clean(str(r["name"])))
-    model = _html.escape(disp_model(r))
+    model = _html.escape(disp_model(r, redact_on))
     bridge = _html.escape(_clean(str(r["bridge_short"])))
     seff = r.get("session_effort")
     seff_html = (f"<span class=mono>{_html.escape(trunc(seff, 8))}</span>" if seff

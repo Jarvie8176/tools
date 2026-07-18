@@ -138,17 +138,22 @@ def test_disp_model_prefers_alias_else_short():
     assert render.disp_model(_base_row()) == "opus-4-8"           # alias empty -> shortened raw id
 
 
-def test_html_render_uses_alias_but_keeps_raw_model_field():
+def test_disp_model_suppresses_alias_under_redaction():
+    # alias is operator free text -> hidden when redacting; fall back to the non-sensitive raw id
+    assert render.disp_model(_base_row(model_alias="Secret"), redact=True) == "opus-4-8"
+
+
+def test_html_render_shows_alias_when_not_redacting_keeps_raw_model():
     from cc_monitor import config
+    cfg = {**config.DEFAULTS, "redact_default": False}
     r = _base_row(model_alias="MyOpus")
-    html = render._row_html(r, config.DEFAULTS)
-    assert "MyOpus" in html                                       # alias shown
+    html = render._row_html(r, cfg)
+    assert "MyOpus" in html                                       # alias shown when reveal on
     assert r["model"] == "claude-opus-4-8"                        # raw field untouched (join/key)
 
 
-def test_text_render_uses_alias():
+def test_html_render_hides_alias_under_redaction():
     from cc_monitor import config
-    d = {"rows": [_base_row(model_alias="AliasX")], "prom": {}, "effort": None, "recon": {}, "ts": 0}
-    assert config.DEFAULTS  # config module in use (render_text reads it internally)
-    out = render.render_text(d)
-    assert "AliasX" in out
+    cfg = {**config.DEFAULTS, "redact_default": True}
+    html = render._row_html(_base_row(model_alias="Secret"), cfg)
+    assert "Secret" not in html and "opus-4-8" in html           # masked -> raw model id instead

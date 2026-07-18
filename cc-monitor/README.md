@@ -85,7 +85,11 @@ a settings drawer (reveal · theme · prompt line-clamp · ctx thresholds · col
 alias + window override), and in-place rename (writing back via `POST /api/titles`). The settings
 drawer's **模型 / 窗口容量** section makes each model's window capacity visible and lets you set an
 alias or a manual window override, or adopt an auto-detected window candidate (writes via
-`POST /api/models` — server-side, not a browser-local pref). Prompt summaries truncate by visual line count (CSS
+`POST /api/models` — server-side, not a browser-local pref). A model **alias is free text and is
+treated as private**: like the prompt/title, it is redacted under `redact_default` (masked in the
+API/SSE payload and every render path; the dashboard falls back to the raw model id, which is
+non-sensitive), and the settings alias field is editable only with reveal on. The window
+override/candidate are numeric and are never redacted. Prompt summaries truncate by visual line count (CSS
 line-clamp), so CJK reads as a first-class script. Display prefs persist in `localStorage`; reveal
 is a server behaviour switch (`redact_default`), single-user with no per-device auth. `/legacy`
 still serves the no-JS `<meta refresh>` fallback for curl.

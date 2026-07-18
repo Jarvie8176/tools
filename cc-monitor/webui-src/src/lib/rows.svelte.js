@@ -15,6 +15,9 @@ const shortModel = (m) => (m || '—').replace('claude-', '');
 const WIN_SRC = { manual: '手动', evidence: '实测', candidate: '候选', unknown: '?' };
 // server-redacted free text arrives as the marker → render a masked block; else the text itself
 const disp = (t) => (t === REDACT ? BLOCK : t);
+// alias is redacted server-side too; when masked, drop it (caller falls back to the raw model id,
+// which is non-sensitive) rather than showing a block — the model stays identifiable under redaction
+const aliasClean = (a) => (a && a !== REDACT ? a : '');
 
 export function buildRows() {
   return feed.sessions.map((s) => {
@@ -54,9 +57,9 @@ export function buildRows() {
       uuid: (s.u8 || '') + '…',
       fullId: s.session_id || s.bridge_id || '',
       bridge: s.bridge_id ? s.bridge_id + '…' : '—',
-      model: orphan ? '—' : (s.model_alias || shortModel(s.model)),
+      model: orphan ? '—' : (aliasClean(s.model_alias) || shortModel(s.model)),
       effort: s.session_effort || null,
-      modelStr: orphan ? '—' : ((s.model_alias || shortModel(s.model)) + (s.session_effort ? ` · ${s.session_effort}` : '')),
+      modelStr: orphan ? '—' : ((aliasClean(s.model_alias) || shortModel(s.model)) + (s.session_effort ? ` · ${s.session_effort}` : '')),
       cum: orphan ? '—' : (s.full ? `↓${fmtK(s.cum_input)} ↑${fmtK(s.cum_output)}` : '(大会话)'),
       winStr: fmtK(win) + ' ' + (WIN_SRC[s.win_source] || (s.win_certain ? '实测' : '?')),
       origin,

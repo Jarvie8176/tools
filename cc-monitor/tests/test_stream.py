@@ -100,3 +100,35 @@ def test_api_stream_emits_initial_sse_data_frame(sse_port):
         s.close()
     assert b"text/event-stream" in buf       # correct content type
     assert b"data: " in buf and b'"sessions"' in buf  # primed with the current snapshot
+
+
+def test_serialize_redacts_model_alias_and_summary_when_on(monkeypatch):
+    from cc_monitor import config, privacy
+    monkeypatch.setattr(config, "load", lambda *a, **k: {**config.DEFAULTS, "redact_default": True})
+    d = {"rows": [_row(model_alias="CustomerCodename")], "prom": {},
+         "models": [{"model": "claude-opus-4-8", "alias": "CustomerCodename", "override": None,
+                     "candidate": None, "win": 200000, "win_certain": True,
+                     "win_source": "evidence", "sessions": 1}]}
+    out = json.loads(stream.serialize(d))
+    # alias is operator free text -> masked under redaction, in BOTH the row and the model summary
+    assert out["sessions"][0]["model_alias"] == privacy.MARKER
+    assert out["models"][0]["alias"] == privacy.MARKER
+
+
+def test_serialize_passes_model_alias_through_when_reveal(monkeypatch):
+    from cc_monitor import config
+    monkeypatch.setattr(config, "load", lambda *a, **k: {**config.DEFAULTS, "redact_default": False})
+    d = {"rows": [_row(model_alias="Opus-Big")], "prom": {},
+         "models": [{"model": "claude-opus-4-8", "alias": "Opus-Big", "sessions": 1}]}
+    out = json.loads(stream.serialize(d))
+    assert out["sessions"][0]["model_alias"] == "Opus-Big"
+    assert out["models"][0]["alias"] == "Opus-Big"
+
+
+def test_serialize_does_not_mutate_source_models(monkeypatch):
+    from cc_monitor import config
+    monkeypatch.setattr(config, "load", lambda *a, **k: {**config.DEFAULTS, "redact_default": True})
+    models = [{"model": "m", "alias": "Secret", "sessions": 1}]
+    d = {"rows": [], "prom": {}, "models": models}
+    stream.serialize(d)
+    assert models[0]["alias"] == "Secret"  # the shared collect() result is copied, never masked in place

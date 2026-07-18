@@ -25,7 +25,12 @@
     const n = Math.round(Number(s));
     if (Number.isFinite(n) && n > 0) postModel(model, { window: n });
   }
-  function commitAlias(model, raw) { postModel(model, { alias: (raw || '').trim() }); }
+  const REDACT = '[redacted]';
+  const aliasMasked = (a) => a === REDACT;             // server-redacted (reveal off) → don't edit
+  function commitAlias(model, raw) {
+    if (raw === REDACT) return;                         // never write the mask back as the alias
+    postModel(model, { alias: (raw || '').trim() });
+  }
   const onEnter = (fn) => (e) => { if (e.key === 'Enter') { e.preventDefault(); fn(e); e.currentTarget.blur(); } };
 
   const LEGEND = [
@@ -167,19 +172,20 @@
         {#each feed.models as m, i (m.model)}
           <div class="px-3.5 py-3 {i > 0 ? 'border-t border-bd2' : ''}">
             <div class="flex items-baseline gap-2">
-              <span class="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-t1">{m.alias || m.model}</span>
+              <span class="min-w-0 flex-1 truncate font-mono text-[12px] font-medium text-t1">{aliasMasked(m.alias) ? m.model : (m.alias || m.model)}</span>
               <span class="shrink-0 text-[11px] tabular-nums {(SRC[m.win_source] || SRC.unknown).cls}">
                 {fmtK(m.win || 0)} · {(SRC[m.win_source] || SRC.unknown).label}
               </span>
             </div>
-            {#if m.alias}<div class="mt-0.5 font-mono text-[10px] text-t4">{m.model}</div>{/if}
-            <div class="mt-0.5 text-[10px] text-t4">{m.sessions} 个在册会话</div>
+            {#if m.alias && !aliasMasked(m.alias)}<div class="mt-0.5 font-mono text-[10px] text-t4">{m.model}</div>{/if}
+            <div class="mt-0.5 text-[10px] text-t4">{m.sessions} 个在册会话{aliasMasked(m.alias) ? ' · 别名已隐藏' : ''}</div>
 
             <div class="mt-2 flex gap-2">
               <input
-                class="min-w-0 flex-1 rounded-[7px] border border-bd2 bg-well px-2.5 py-1.5 text-[11.5px] text-t1 outline-none focus:border-info"
-                placeholder="别名（可选）"
-                value={m.alias || ''}
+                class="min-w-0 flex-1 rounded-[7px] border border-bd2 bg-well px-2.5 py-1.5 text-[11.5px] text-t1 outline-none focus:border-info disabled:opacity-50"
+                placeholder={aliasMasked(m.alias) ? '别名已隐藏 · 开启「下发原文」编辑' : '别名（可选）'}
+                value={aliasMasked(m.alias) ? '' : (m.alias || '')}
+                disabled={aliasMasked(m.alias)}
                 onkeydown={onEnter((e) => commitAlias(m.model, e.currentTarget.value))}
                 onblur={(e) => commitAlias(m.model, e.currentTarget.value)}
               />
