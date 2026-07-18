@@ -72,6 +72,8 @@ def _handler(cache: _Cache, broker: Broker | None = None):
                     self._json(config.load())  # UI/API reads the effective runtime config
                 elif path == "/metrics":
                     self._metrics(broker) if broker else self._notfound()  # aggregate exposition
+                elif path == "/manifest.webmanifest":
+                    self._manifest()  # PWA install manifest (manifest-only, no service worker)
                 elif path == "/favicon.ico":
                     self._empty()  # 204; the page also inlines a data-URI icon to avoid the request
                 else:
@@ -247,6 +249,15 @@ def _handler(cache: _Cache, broker: Broker | None = None):
             self.send_response(200)
             self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _manifest(self):
+            body = webui.manifest()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/manifest+json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "no-cache")
             self.end_headers()
             self.wfile.write(body)
 
