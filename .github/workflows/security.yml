@@ -32,10 +32,10 @@ jobs:
         # plugin lands in pip-audit).
         project: [rclone-migrate]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Install pip-audit
@@ -48,7 +48,7 @@ jobs:
         run: pip-audit --strict --format json --output audit.json .
       - name: Upload audit JSON
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: pip-audit-${{ matrix.project }}
           path: ${{ matrix.project }}/audit.json
@@ -62,10 +62,10 @@ jobs:
       contents: read
       security-events: write  # for SARIF upload
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install 'bandit[sarif,toml]'
@@ -79,7 +79,7 @@ jobs:
             -f sarif -o bandit.sarif || true
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: bandit.sarif
           category: bandit
@@ -89,11 +89,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0  # full history so PR scans cover all new commits
           persist-credentials: false
-      - uses: gitleaks/gitleaks-action@dcedce43c6f43de0b836d1fe38946645c9c638dc  # v2
+      - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # No GITLEAKS_LICENSE — free tier is fine for personal/public repos.
@@ -108,7 +108,7 @@ jobs:
       contents: read
       security-events: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Trivy filesystem scan
@@ -129,7 +129,7 @@ jobs:
           exit-code: '0'  # don't fail build; surface via Security tab
       - name: Upload SARIF
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@v4
         with:
           sarif_file: trivy.sarif
           category: trivy-fs
