@@ -32,12 +32,12 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
           persist-credentials: false
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
 
@@ -98,14 +98,14 @@ jobs:
       - name: Sign artifacts (sigstore keyless)
         # Produces a `<artifact>.sigstore` bundle file per input — verifiable
         # later via `python -m sigstore verify identity`.
-        uses: sigstore/gh-action-sigstore-python@04cffa1d795717b140764e8b640de88853c92acc  # v3.3.0
+        uses: sigstore/gh-action-sigstore-python@790bc6befb9d733738f18d8f895854b453640ec9  # v3.5.0
         with:
           inputs: |
             rclone-migrate/dist/*.whl
             rclone-migrate/dist/*.tar.gz
 
       - name: Upload artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: rclone-migrate-dist
           path: |
@@ -125,7 +125,7 @@ jobs:
     permissions:
       contents: write  # creating a release
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: rclone-migrate-dist
           path: dist
