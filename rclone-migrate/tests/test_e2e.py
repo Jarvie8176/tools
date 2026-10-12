@@ -17,6 +17,7 @@ import pytest
 from rclone_migrate import cache as cache_mod
 from rclone_migrate import config as config_mod
 from rclone_migrate import ops
+from rclone_migrate import cli, mhl
 
 
 pytestmark = pytest.mark.skipif(
@@ -70,6 +71,56 @@ def _list(p: Path) -> set:
             # startswith() match.
             out.add(str((Path(dp) / n).relative_to(p)))
     return out
+
+
+@pytest.mark.parametrize("filtered_remote", [False, True])
+def test_download_hash_option_does_not_reach_copyto(tmp_path, monkeypatch, filtered_remote):
+    """Use real rclone: --download is valid for hashing, invalid for copyto."""
+    src, dst, sd = (tmp_path / name for name in ("src", "dst", "state"))
+    for p in (src, dst, sd):
+        p.mkdir()
+    (src / "one.JPG").write_bytes(b"camera-original")
+    cfg_path = tmp_path / "c.toml"
+    _write_config(cfg_path, src, dst, sd, hash="xxh128")
+    text = cfg_path.read_text().replace("local_cache_in_root = true", "local_cache_in_root = false")
+    text = text.replace("[delete]", 'download = true\nemit_mhl = true\nmhl_hash = "xxh64"\nmhl_sides = ["dst"]\n[delete]')
+    cfg_path.write_text(text)
+    cfg = config_mod.load(cfg_path)
+    job = cfg.get_job("t")
+    if filtered_remote:
+        remote_config = tmp_path / "rclone.conf"
+        remote_config.write_text("[regression]\ntype = local\n")
+        filters = tmp_path / "photos.filter"
+        filters.write_text("+ *.JPG\n- **\n")
+        monkeypatch.setenv("RCLONE_CONFIG", str(remote_config))
+        monkeypatch.setenv("RCLONE_FILTER_FROM", str(filters))
+        job.src = "regression:" + str(src)
+        cfg_path.write_text(text.replace(f"src = '{src}'", f"src = 'regression:{src}'"))
+        (src / "excluded.MOV").write_bytes(b"video-original")
+    observed = []
+    original = ops.rclone.copyto
+
+    def record_copy(*args, **kwargs):
+        observed.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ops.rclone, "copyto", record_copy)
+    assert ops.do_copy(cfg, job, progress=False) == 0
+    assert observed and all("--download" not in kw.get("extra", []) for kw in observed)
+    assert (dst / "one.JPG").read_bytes() == b"camera-original"
+    assert ops.do_check(cfg, job, progress=False) == 0
+    assert (src / "one.JPG").read_bytes() == b"camera-original"
+    # copy/check may record the primary. An explicit destination-only seal
+    # computes the report secondary without writing an MHL on the source.
+    assert cli.cmd_hash(["-c", str(cfg_path), "-j", "t", "--side", "dst"]) == 0
+    latest = sorted((dst / "ascmhl").glob("*.mhl"))[-1]
+    entries = mhl.parse_manifest(latest.read_bytes())
+    assert entries and all("xxh64" in entry.hashes for entry in entries)
+    assert not (src / "ascmhl").exists()
+    if filtered_remote:
+        assert not (dst / "excluded.MOV").exists()
+        assert (src / "excluded.MOV").read_bytes() == b"video-original"
+        assert os.environ["RCLONE_FILTER_FROM"] == str(filters)
 
 
 def test_full_flow_records_events(tmp_path: Path):

@@ -238,6 +238,12 @@ compute it — slow + expensive; rmig warns before the bulk pull).
 both sides advertise natively, so it can't silently download a whole tree —
 the download path is reachable only through an explicit `hash =` override.
 
+`download` applies to hashing, not to `rclone copyto`. Directory filters
+provided through `RCLONE_*` environment variables select files during
+enumeration and hashing; single-object copies remove those filter variables
+from their subprocess environment because rclone rejects filtered remote
+file sources. The parent environment and backend configuration stay intact.
+
 ### Profiles — picking a different priority order
 
 Set `hash_profile = "<name>"` to swap the priority list. Built-in profiles:

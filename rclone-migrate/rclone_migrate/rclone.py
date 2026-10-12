@@ -34,7 +34,8 @@ def set_verbose(v) -> None:
     _VERBOSE_HOOK = v
 
 
-def _run(args: List[str], check: bool = True, capture: bool = True) -> subprocess.CompletedProcess:
+def _run(args: List[str], check: bool = True, capture: bool = True,
+         env: Optional[Dict[str, str]] = None) -> subprocess.CompletedProcess:
     full = [_bin(), *args]
     if _VERBOSE_HOOK is not None and _VERBOSE_HOOK.is_detail():
         # Print as a single shell-quoted line so user can copy-paste
@@ -49,6 +50,7 @@ def _run(args: List[str], check: bool = True, capture: bool = True) -> subproces
         stdout=subprocess.PIPE if capture else None,
         stderr=subprocess.PIPE,
         text=True,
+        env=env,
     )
     if check and cp.returncode != 0:
         raise RcloneError(
@@ -297,7 +299,22 @@ def copyto(src: str, dst: str, algo: str, transfers: int = 8,
     ]
     if extra:
         args.extend(extra)
-    _run(args + [src, dst], capture=False)
+    # Directory filters already selected this object during enumeration.
+    # rclone rejects a remote single-file source when these remain in its
+    # environment. Clear only listing filters for this subprocess; preserve
+    # credentials/config and the parent environment for subsequent scans.
+    filter_keys = {
+        "RCLONE_" + flag for flag in (
+            "FILTER", "FILTER_FROM", "INCLUDE", "INCLUDE_FROM", "EXCLUDE",
+            "EXCLUDE_FROM", "EXCLUDE_IF_PRESENT", "FILES_FROM", "FILES_FROM_RAW",
+            "FILES_FROM0", "HASH_FILTER", "IGNORE_CASE", "MIN_AGE", "MAX_AGE",
+            "MIN_SIZE", "MAX_SIZE", "METADATA_FILTER", "METADATA_FILTER_FROM",
+            "METADATA_INCLUDE", "METADATA_INCLUDE_FROM", "METADATA_EXCLUDE",
+            "METADATA_EXCLUDE_FROM",
+        )
+    }
+    env = {key: value for key, value in os.environ.items() if key not in filter_keys}
+    _run(args + [src, dst], capture=False, env=env)
 
 
 def have_rsync() -> bool:
