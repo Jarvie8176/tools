@@ -527,9 +527,8 @@ def do_copy(
         failures = 0
         copied_dst_paths: List[str] = []
         transfers = job.resolved_transfers(cfg.defaults)
-        extra: List[str] = []
-        if job.resolved_download(cfg.defaults):
-            extra.append("--download")
+        # download is a hashsum-only flag. Remote hash refresh already uses
+        # it above; rclone copyto always reads source bytes and rejects it.
 
         meter = progress_mod.ProgressMeter(
             v, "[copy]",
@@ -568,7 +567,7 @@ def do_copy(
                         else:
                             rclone.copyto(
                                 src_full, dst_full, algo,
-                                transfers=transfers, extra=extra,
+                                transfers=transfers,
                             )
                     copied_dst_paths.append(ent.path)
                     meter.file_done(committed_size=max(ent.size, 0))

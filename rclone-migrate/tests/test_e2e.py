@@ -72,6 +72,33 @@ def _list(p: Path) -> set:
     return out
 
 
+def test_download_hash_option_does_not_reach_copyto(tmp_path, monkeypatch):
+    """Use real rclone: --download is valid for hashing, invalid for copyto."""
+    src, dst, sd = (tmp_path / name for name in ("src", "dst", "state"))
+    for p in (src, dst, sd):
+        p.mkdir()
+    (src / "one.JPG").write_bytes(b"camera-original")
+    cfg_path = tmp_path / "c.toml"
+    _write_config(cfg_path, src, dst, sd, hash="xxh128")
+    cfg = config_mod.load(cfg_path)
+    cfg.defaults.download = True
+    cfg.defaults.local_cache_in_root = False
+    job = cfg.get_job("t")
+    observed = []
+    original = ops.rclone.copyto
+
+    def record_copy(*args, **kwargs):
+        observed.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(ops.rclone, "copyto", record_copy)
+    assert ops.do_copy(cfg, job, progress=False) == 0
+    assert observed and all("--download" not in kw.get("extra", []) for kw in observed)
+    assert (dst / "one.JPG").read_bytes() == b"camera-original"
+    assert ops.do_check(cfg, job, progress=False) == 0
+    assert (src / "one.JPG").read_bytes() == b"camera-original"
+
+
 def test_full_flow_records_events(tmp_path: Path):
     """copy → check → delete each emit one event; deleted files appear in
     file_events as outcome='deleted'."""
