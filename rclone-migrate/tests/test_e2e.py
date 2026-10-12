@@ -72,7 +72,8 @@ def _list(p: Path) -> set:
     return out
 
 
-def test_download_hash_option_does_not_reach_copyto(tmp_path, monkeypatch):
+@pytest.mark.parametrize("filtered_remote", [False, True])
+def test_download_hash_option_does_not_reach_copyto(tmp_path, monkeypatch, filtered_remote):
     """Use real rclone: --download is valid for hashing, invalid for copyto."""
     src, dst, sd = (tmp_path / name for name in ("src", "dst", "state"))
     for p in (src, dst, sd):
@@ -84,6 +85,15 @@ def test_download_hash_option_does_not_reach_copyto(tmp_path, monkeypatch):
     cfg.defaults.download = True
     cfg.defaults.local_cache_in_root = False
     job = cfg.get_job("t")
+    if filtered_remote:
+        remote_config = tmp_path / "rclone.conf"
+        remote_config.write_text("[regression]\ntype = local\n")
+        filters = tmp_path / "photos.filter"
+        filters.write_text("+ *.JPG\n- **\n")
+        monkeypatch.setenv("RCLONE_CONFIG", str(remote_config))
+        monkeypatch.setenv("RCLONE_FILTER_FROM", str(filters))
+        job.src = "regression:" + str(src)
+        (src / "excluded.MOV").write_bytes(b"video-original")
     observed = []
     original = ops.rclone.copyto
 
@@ -97,6 +107,10 @@ def test_download_hash_option_does_not_reach_copyto(tmp_path, monkeypatch):
     assert (dst / "one.JPG").read_bytes() == b"camera-original"
     assert ops.do_check(cfg, job, progress=False) == 0
     assert (src / "one.JPG").read_bytes() == b"camera-original"
+    if filtered_remote:
+        assert not (dst / "excluded.MOV").exists()
+        assert (src / "excluded.MOV").read_bytes() == b"video-original"
+        assert os.environ["RCLONE_FILTER_FROM"] == str(filters)
 
 
 def test_full_flow_records_events(tmp_path: Path):
